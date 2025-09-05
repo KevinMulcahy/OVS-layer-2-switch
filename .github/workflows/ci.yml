@@ -13,27 +13,36 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      ovs:
-        image: socketplane/openvswitch:latest
-        options: --privileged
+
     steps:
     - uses: actions/checkout@v4
+
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
         node-version: ${{ env.NODE_VERSION }}
         cache: 'npm'
-    - name: Setup OVS
+
+    # Removing the outdated 'ovs' Docker service
+    - name: Setup Open vSwitch
       run: |
         sudo apt-get update
         sudo apt-get install -y openvswitch-switch openvswitch-common
         sudo systemctl start openvswitch-switch
+        sudo systemctl status openvswitch-switch
+      # Adding error handling
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
     - name: Install dependencies
       run: npm ci
+
     - name: Run linting
       run: npm run lint
+
     - name: Run tests
       run: npm run test
+
     - name: Build packages
       run: npm run build
+    
