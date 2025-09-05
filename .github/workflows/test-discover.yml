@@ -30,8 +30,8 @@ jobs:
       - name: Install Dependencies
         run: |
           if command -v apt-get >/dev/null; then
-            sudo apt-get update -y -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            apt-get update -y -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
               openvswitch-switch \
               openvswitch-common \
               bridge-utils \
@@ -42,9 +42,9 @@ jobs:
               jq \
               git
           elif command -v dnf >/dev/null; then
-            sudo dnf install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
+            dnf install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
           elif command -v yum >/dev/null; then
-            sudo yum install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
+            yum install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
           fi
 
       - name: Verify Dependencies
@@ -60,17 +60,17 @@ jobs:
 
       - name: Setup Dummy Interfaces
         run: |
-          sudo modprobe dummy || true
-          sudo ip link add dummy0 type dummy || true
-          sudo ip link add dummy1 type dummy || true
-          sudo ip link set dummy0 up
-          sudo ip link set dummy1 up
-          sudo ip addr add 10.123.0.1/24 dev dummy0
-          sudo ip addr add 10.123.0.2/24 dev dummy1
+          modprobe dummy || true
+          ip link add dummy0 type dummy || true
+          ip link add dummy1 type dummy || true
+          ip link set dummy0 up
+          ip link set dummy1 up
+          ip addr add 10.123.0.1/24 dev dummy0
+          ip addr add 10.123.0.2/24 dev dummy1
 
       - name: Run Interface Discovery Test
         run: |
-          sudo bash ./tests/test-discover-harness.sh
+          TEST_MODE=true FORCE=true bash ./tests/test-discover-harness.sh
 
       - name: Display Detected Interfaces Summary
         run: |
