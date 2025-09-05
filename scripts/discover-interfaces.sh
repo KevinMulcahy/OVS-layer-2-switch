@@ -1,41 +1,42 @@
 #!/bin/bash
-# discover-interfaces.sh
-#
-# Discover and validate physical network interfaces for Open vSwitch setup.
-# Excludes management interface, saves config, and provides a report.
+# discover-interfaces.sh - CI/Test-friendly version
 
 set -euo pipefail
 
-# Colors for output
+# ----------------------------
+# Configuration Flags
+# ----------------------------
+TEST_MODE="${TEST_MODE:-false}"   # true to include dummy interfaces in testing
+FORCE="${FORCE:-false}"           # true to skip interactive prompts
+MANAGEMENT_INTERFACE="${MANAGEMENT_INTERFACE:-eth0}"
+MIN_INTERFACES=2
+CONFIG_FILE="/etc/ovs/interface-config.conf"
+
+# ----------------------------
+# Color Codes
+# ----------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-CONFIG_FILE="/etc/ovs/interface-config.conf"
-MIN_INTERFACES=2
-MANAGEMENT_INTERFACE="${MANAGEMENT_INTERFACE:-eth0}"
+# ----------------------------
+# Logging Functions
+# ----------------------------
+log()   { echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"; }
+warn()  { echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"; }
+error() { echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"; exit 1; }
 
-log() {
-    echo -e "${GREEN}[$(date '+%Y-%m-%d %H:%M:%S')]${NC} $1"
-}
-
-warn() {
-    echo -e "${YELLOW}[$(date '+%Y-%m-%d %H:%M:%S')] WARNING:${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[$(date '+%Y-%m-%d %H:%M:%S')] ERROR:${NC} $1"
-    exit 1
-}
-
-# Discover all physical network interfaces (excluding mgmt, loopback, virtual, docker, ovs)
+# ----------------------------
+# Discover Interfaces
+# ----------------------------
 discover_interfaces() {
     log "Discovering network interfaces..."
+
     sudo mkdir -p /etc/ovs
 
+    # List all interfaces excluding lo, bridges, docker, ovs
     local all_interfaces=($(ip link show | grep -E "^[0-9]+: " | grep -v "lo:" | \
         grep -v "@" | grep -v "docker" | grep -v "br-" | grep -v "ovs-" | \
         awk -F': ' '{print $2}' | awk '{print $1}'))
@@ -43,7 +44,8 @@ discover_interfaces() {
     local available_interfaces=()
     for iface in "${all_interfaces[@]}"; do
         if [[ "$iface" != "$MANAGEMENT_INTERFACE" ]]; then
-            if [[ -d "/sys/class/net/$iface/device" ]]; then
+            # Accept dummy interfaces in test mode
+            if [[ "$TEST_MODE" == "true" ]] || [[ -d "/sys/class/net/$iface/device" ]]; then
                 available_interfaces+=("$iface")
             fi
         fi
@@ -52,9 +54,10 @@ discover_interfaces() {
     log "Found ${#available_interfaces[@]} available interfaces (excluding $MANAGEMENT_INTERFACE)"
 
     if [[ ${#available_interfaces[@]} -lt $MIN_INTERFACES ]]; then
-        error "Need at least $MIN_INTERFACES interfaces for switching. Found: ${#available_interfaces[@]}"
+        error "Need at least $MIN_INTERFACES interfaces. Found: ${#available_interfaces[@]}"
     fi
 
+    # Display interface info
     echo -e "\n${BLUE}=== Interface Discovery Report ===${NC}"
     printf "%-12s %-15s %-10s %-15s %-20s\n" "Interface" "MAC Address" "State" "Speed" "Driver"
     echo "-----------------------------------------------------------------------"
@@ -64,7 +67,6 @@ discover_interfaces() {
         local state=$(ip link show $iface | grep -o "state [A-Z]*" | awk '{print $2}' || echo "UNKNOWN")
         local speed=$(ethtool $iface 2>/dev/null | grep "Speed:" | awk '{print $2}' || echo "N/A")
         local driver=$(ethtool -i $iface 2>/dev/null | grep "driver:" | awk '{print $2}' || echo "N/A")
-
         printf "%-12s %-15s %-10s %-15s %-20s\n" "$iface" "$mac" "$state" "$speed" "$driver"
     done
 
@@ -80,16 +82,22 @@ EOF
 
     log "Configuration saved to $CONFIG_FILE"
 
-    echo -e "\n${YELLOW}Do you want to proceed with these interfaces? (y/N):${NC}"
-    read -r response
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        log "Operation cancelled by user"
-        exit 0
+    # Interactive confirmation (skip if FORCE or TEST_MODE)
+    if [[ "$FORCE" != "true" && "$TEST_MODE" != "true" ]]; then
+        echo -e "\n${YELLOW}Do you want to proceed with these interfaces? (y/N):${NC}"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            log "Operation cancelled by user"
+            exit 0
+        fi
+    else
+        log "Skipping interactive confirmation (FORCE/TEST_MODE enabled)"
     fi
-    return 0
 }
 
-# Validate interfaces
+# ----------------------------
+# Validate Interfaces
+# ----------------------------
 validate_interfaces() {
     local interfaces=("$@")
     local failed_interfaces=()
@@ -97,35 +105,27 @@ validate_interfaces() {
     log "Validating interfaces..."
 
     for iface in "${interfaces[@]}"; do
-        if [[ ! -d "/sys/class/net/$iface" ]]; then
-            warn "Interface $iface does not exist"
-            failed_interfaces+=("$iface")
-            continue
-        fi
+        [[ ! -d "/sys/class/net/$iface" ]] && { warn "$iface does not exist"; failed_interfaces+=("$iface"); continue; }
 
         if bridge link show dev "$iface" 2>/dev/null | grep -q "master"; then
-            warn "Interface $iface is already part of a bridge"
-            failed_interfaces+=("$iface")
-            continue
+            warn "$iface is already part of a bridge"; failed_interfaces+=("$iface"); continue
         fi
 
         if ip addr show "$iface" | grep -q "inet "; then
-            warn "Interface $iface has IP addresses assigned"
+            warn "$iface has IP addresses assigned"
             echo "  Run: sudo ip addr flush dev $iface"
         fi
     done
 
-    if [[ ${#failed_interfaces[@]} -gt 0 ]]; then
-        error "Validation failed for interfaces: ${failed_interfaces[*]}"
-    fi
-
+    [[ ${#failed_interfaces[@]} -gt 0 ]] && error "Validation failed for: ${failed_interfaces[*]}"
     log "All interfaces validated successfully"
 }
 
+# ----------------------------
 # Show current network config
+# ----------------------------
 show_network_config() {
     echo -e "\n${BLUE}=== Current Network Configuration ===${NC}"
-
     echo -e "\n${YELLOW}Bridges:${NC}"
     bridge link show 2>/dev/null || echo "No bridges found"
 
@@ -136,19 +136,22 @@ show_network_config() {
     ip link show | grep -E "^[0-9]+:|state"
 }
 
+# ----------------------------
+# Main Execution
+# ----------------------------
 main() {
     log "Starting OVS Interface Discovery"
 
-    if [[ $EUID -ne 0 ]]; then
-        error "This script must be run as root or with sudo"
-    fi
+    [[ $EUID -ne 0 ]] && error "This script must be run as root or with sudo"
 
     show_network_config
     discover_interfaces
+
     source "$CONFIG_FILE"
     validate_interfaces "${SWITCH_INTERFACES[@]}"
 
     log "Interface discovery completed successfully"
+    log "Ready for OVS installation/configuration"
     log "Configuration file: $CONFIG_FILE"
 
     echo -e "\n${GREEN}Next steps:${NC}"
