@@ -8,7 +8,12 @@ on:
 
 jobs:
   test-discover:
+    strategy:
+      matrix:
+        os: [ubuntu:22.04, fedora:40, quay.io/centos/centos:stream9]
     runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.os }}
     timeout-minutes: 60
 
     steps:
@@ -22,27 +27,35 @@ jobs:
           export TEST_MODE=true
           export FORCE=true
 
-      - name: Update apt repositories
-        run: sudo apt-get update -y -qq
-
       - name: Install Dependencies
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            openvswitch-switch \
-            openvswitch-common \
-            bridge-utils \
-            net-tools \
-            tcpdump \
-            ethtool \
-            curl \
-            jq \
-            git
+          if command -v apt-get >/dev/null; then
+            sudo apt-get update -y -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+              openvswitch-switch \
+              openvswitch-common \
+              bridge-utils \
+              net-tools \
+              tcpdump \
+              ethtool \
+              curl \
+              jq \
+              git
+          elif command -v dnf >/dev/null; then
+            sudo dnf install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
+          elif command -v yum >/dev/null; then
+            sudo yum install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
+          fi
 
       - name: Verify Dependencies
         run: |
           echo "Checking installed packages..."
           for pkg in openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git; do
-            dpkg -l | grep -qw $pkg && echo "$pkg installed" || echo "$pkg NOT installed"
+            if command -v $pkg >/dev/null 2>&1 || dpkg -l | grep -qw $pkg; then
+              echo "$pkg installed"
+            else
+              echo "$pkg NOT installed"
+            fi
           done
 
       - name: Setup Dummy Interfaces
@@ -57,4 +70,20 @@ jobs:
 
       - name: Run Interface Discovery Test
         run: |
-          sudo TEST_MODE=true FORCE=true bash ./scripts/discover-interfaces.sh
+          sudo bash ./tests/test-discover-harness.sh
+
+      - name: Display Detected Interfaces Summary
+        run: |
+          echo -e "\n=== Summary of Detected Interfaces on ${{ matrix.os }} ==="
+          if [[ -f /etc/ovs/interface-config.conf ]]; then
+            grep -E '^SWITCH_INTERFACES=' /etc/ovs/interface-config.conf
+          else
+            echo "No configuration file found. Discovery may have failed."
+          fi
+          echo "=========================================================="
+
+      - name: Upload Test Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovs-discover-test-results-${{ matrix.os }}
+          path: tests/logs/*.log
