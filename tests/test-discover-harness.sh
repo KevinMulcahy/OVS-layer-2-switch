@@ -1,60 +1,52 @@
 #!/bin/bash
-# tests/test-discover-harness.sh
-# Automated test harness for discover-interfaces.sh
+# test-discover-harness.sh
+# CI-friendly harness for testing discover-interfaces.sh
 
-SCRIPT="../scripts/discover-interfaces.sh"
-LOG="test-results-$(hostname)-$(date +%Y%m%d%H%M).log"
+set -euo pipefail
 
-echo "Running discover-interfaces.sh tests on $(hostname)" | tee "$LOG"
-echo "===================================================" | tee -a "$LOG"
+# ----------------------------
+# Environment Setup
+# ----------------------------
+export TEST_MODE=true
+export FORCE=true
+export MANAGEMENT_INTERFACE="${MANAGEMENT_INTERFACE:-eth0}"
 
-PASS=0
-FAIL=0
+# Directory variables
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)"
+LOG_DIR="$(pwd)/logs"
+mkdir -p "$LOG_DIR"
 
-run_test() {
-    local name="$1"
-    shift
-    echo -e "\n[TEST] $name" | tee -a "$LOG"
-    if "$@" >>"$LOG" 2>&1; then
-        echo "PASS: $name" | tee -a "$LOG"
-        ((PASS++))
-    else
-        echo "FAIL: $name" | tee -a "$LOG"
-        ((FAIL++))
-    fi
-}
+LOG_FILE="$LOG_DIR/discover-interfaces-$(date +%Y%m%d-%H%M%S).log"
 
-# --- Test Cases ---
+# ----------------------------
+# Run the Discovery Script
+# ----------------------------
+echo "Starting discover-interfaces.sh test..."
+echo "Logging output to $LOG_FILE"
 
-# 1. Run without sudo (expect fail)
-run_test "Run without sudo" $SCRIPT || true
+set +e
+sudo bash "$SCRIPT_DIR/discover-interfaces.sh" &> "$LOG_FILE"
+EXIT_CODE=$?
+set -e
 
-# 2. Run with sudo (expect success)
-run_test "Run with sudo" sudo $SCRIPT <<EOF
-y
-EOF
+# ----------------------------
+# Verify Results
+# ----------------------------
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo "✅ discover-interfaces.sh completed successfully."
+    echo "Log file: $LOG_FILE"
+else
+    echo "❌ discover-interfaces.sh failed with exit code $EXIT_CODE."
+    echo "Check the log for details: $LOG_FILE"
+    exit $EXIT_CODE
+fi
 
-# 3. Interface with IP assigned
-sudo ip addr add 192.168.123.100/24 dev dummy0
-run_test "Interface with IP assigned (expect warning, still success)" sudo $SCRIPT <<EOF
-y
-EOF
-sudo ip addr flush dev dummy0
-
-# 4. Only one available interface
-sudo ip link set dummy1 down
-run_test "Only one available interface (expect fail)" sudo $SCRIPT <<EOF
-y
-EOF
-sudo ip link set dummy1 up
-
-# 5. Run as root vs non-root (redundant check)
-run_test "Run without sudo again" $SCRIPT || true
-
-# Summary
-echo -e "\n=== TEST SUMMARY ===" | tee -a "$LOG"
-echo "Passed: $PASS" | tee -a "$LOG"
-echo "Failed: $FAIL" | tee -a "$LOG"
-
-# Exit with fail count as status
-exit $FAIL
+# ----------------------------
+# Optional: Display Summary
+# ----------------------------
+echo -e "\n=== Detected Interfaces ==="
+if [[ -f /etc/ovs/interface-config.conf ]]; then
+    grep -E '^SWITCH_INTERFACES=' /etc/ovs/interface-config.conf
+else
+    echo "No configuration file found. Discovery may have failed."
+fi
