@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.9'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      ovs:
+        image: socketplane/openvswitch:latest
+        options: --privileged
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+    - name: Setup OVS
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y openvswitch-switch openvswitch-common
+        sudo systemctl start openvswitch-switch
+    - name: Install dependencies
+      run: npm ci
+    - name: Run linting
+      run: npm run lint
+    - name: Run tests
+      run: npm run test
+    - name: Build packages
+      run: npm run build

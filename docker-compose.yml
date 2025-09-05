@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  ovs:
+    image: socketplane/openvswitch:latest
+    privileged: true
+    networks:
+      - ovs-net
+    volumes:
+      - ovs-data:/var/lib/openvswitch
+    ports:
+      - "6640:6640"
+
+  cli:
+    build:
+      context: .
+      dockerfile: deployment/docker/Dockerfile.cli
+    depends_on:
+      - ovs
+    networks:
+      - ovs-net
+    environment:
+      - OVS_DB_HOST=ovs
+    volumes:
+      - ./packages/cli:/app/packages/cli
+      - ./config:/app/config
+
+networks:
+  ovs-net:
+    driver: bridge
+
+volumes:
+  ovs-data:

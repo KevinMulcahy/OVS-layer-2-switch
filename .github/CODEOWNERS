@@ -1,0 +1,20 @@
+* @network-team @devops-team
+/packages/cli/ @cli-team @network-team
+/docs/guides/cli-guide.md @cli-team @docs-team
+/packages/gui/ @gui-team @frontend-team
+/docs/guides/gui-guide.md @gui-team @docs-team
+/packages/core/ @backend-team @network-team
+/packages/api/ @api-team @backend-team
+/docs/guides/api-documentation.md @api-team @docs-team
+/config/network/ @network-team
+/tools/network-simulator/ @network-team @testing-team
+/docs/ @docs-team
+/examples/ @docs-team @network-team
+/deployment/ @devops-team
+/scripts/deploy/ @devops-team
+/docs/guides/deployment-guide.md @devops-team @docs-team
+/.github/ @devops-team
+/scripts/ @devops-team
+/security/ @security-team
+/SECURITY.md @security-team
+/monitoring/ @devops-team @network-team

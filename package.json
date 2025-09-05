@@ -1,0 +1,67 @@
+{
+  "name": "my-new-repo",
+  "version": "1.0.0",
+  "description": "OVS-layer-2-switch",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "bootstrap": "lerna bootstrap",
+    "build": "lerna run build",
+    "build:cli": "lerna run build --scope @ovs-l2/cli",
+    "build:gui": "lerna run build --scope @ovs-l2/gui", 
+    "build:core": "lerna run build --scope @ovs-l2/core",
+    "test": "lerna run test",
+    "test:ci": "lerna run test:ci",
+    "lint": "lerna run lint",
+    "lint:fix": "lerna run lint:fix",
+    "dev": "lerna run dev --parallel",
+    "dev:cli": "lerna run dev --scope @ovs-l2/cli",
+    "dev:gui": "lerna run dev --scope @ovs-l2/gui",
+    "clean": "lerna run clean && lerna clean",
+    "docs:dev": "mkdocs serve",
+    "docs:build": "mkdocs build",
+    "docs:deploy": "mkdocs gh-deploy",
+    "release": "lerna version --conventional-commits",
+    "publish": "lerna publish from-package",
+    "setup:dev": "bash scripts/setup/dev-environment.sh",
+    "setup:ovs": "bash scripts/setup/configure-ovs.sh",
+    "network:test": "bash scripts/test/network-integration-test.sh"
+  },
+  "keywords": [
+    "ovs",
+    "open-vswitch",
+    "layer2",
+    "networking",
+    "switch",
+    "cli",
+    "gui",
+    "openflow",
+    "vlan",
+    "network-management"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/KevinMulcahy/my-new-repo#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KevinMulcahy/my-new-repo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/KevinMulcahy/my-new-repo/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "devDependencies": {
+    "lerna": "^7.4.2",
+    "@commitlint/cli": "^17.7.1",
+    "@commitlint/config-conventional": "^17.7.0",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.0.1",
+    "concurrently": "^8.2.1",
+    "cross-env": "^7.0.3"
+  }
+}
