@@ -1,4 +1,4 @@
-name: Test Discover OVS
+name: Series Multi-OS Discover Test
 
 on:
   push:
@@ -7,14 +7,9 @@ on:
   pull_request:
 
 jobs:
-  test-discover:
-    strategy:
-      matrix:
-        os: [ubuntu:22.04, fedora:40, quay.io/centos/centos:stream9]
+  series-test:
     runs-on: ubuntu-latest
-    container:
-      image: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 180  # adjust for VM startup time
 
     steps:
       - name: Checkout Repository
@@ -26,64 +21,54 @@ jobs:
           export MANAGEMENT_INTERFACE=eth0
           export TEST_MODE=true
           export FORCE=true
+          mkdir -p ./logs
 
-      - name: Install Dependencies
+      - name: Install Host Dependencies
         run: |
-          if command -v apt-get >/dev/null; then
-            apt-get update -y -qq
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-              openvswitch-switch \
-              openvswitch-common \
-              bridge-utils \
-              net-tools \
-              tcpdump \
-              ethtool \
-              curl \
-              jq \
-              git
-          elif command -v dnf >/dev/null; then
-            dnf install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
-          elif command -v yum >/dev/null; then
-            yum install -y -q openvswitch bridge-utils net-tools tcpdump ethtool curl jq git
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            qemu-kvm libvirt-clients libvirt-daemon-system cloud-image-utils sshpass \
+            openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git
+
+      - name: Run Test on Ubuntu Host
+        run: |
+          bash ./tests/test-discover-harness.sh
+          cp ./tests/logs/*.log ./logs/ubuntu.log
+
+      - name: Run Test in Fedora VM
+        run: |
+          FEDORA_IMG=fedora.qcow2
+          if [ ! -f $FEDORA_IMG ]; then
+            curl -LO https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.6.x86_64.qcow2
           fi
+          cp $FEDORA_IMG fedora-test.qcow2
+          qemu-system-x86_64 -m 2048 -smp 2 -drive file=fedora-test.qcow2,format=qcow2 \
+            -net nic -net user,hostfwd=tcp::2222-:22 -nographic &
+          VM_PID=$!
+          until nc -z localhost 2222; do sleep 5; done
+          sshpass -p fedora ssh -o StrictHostKeyChecking=no -p 2222 fedora@localhost 'bash -s' < ./tests/test-discover-harness.sh
+          scp -P 2222 fedora@localhost:/path/to/logs/*.log ./logs/fedora.log
+          kill $VM_PID
+          wait $VM_PID 2>/dev/null || true
 
-      - name: Verify Dependencies
+      - name: Run Test in CentOS VM
         run: |
-          echo "Checking installed packages..."
-          for pkg in openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git; do
-            if command -v $pkg >/dev/null 2>&1 || dpkg -l | grep -qw $pkg; then
-              echo "$pkg installed"
-            else
-              echo "$pkg NOT installed"
-            fi
-          done
-
-      - name: Setup Dummy Interfaces
-        run: |
-          modprobe dummy || true
-          ip link add dummy0 type dummy || true
-          ip link add dummy1 type dummy || true
-          ip link set dummy0 up
-          ip link set dummy1 up
-          ip addr add 10.123.0.1/24 dev dummy0
-          ip addr add 10.123.0.2/24 dev dummy1
-
-      - name: Run Interface Discovery Test
-        run: |
-          TEST_MODE=true FORCE=true bash ./tests/test-discover-harness.sh
-
-      - name: Display Detected Interfaces Summary
-        run: |
-          echo -e "\n=== Summary of Detected Interfaces on ${{ matrix.os }} ==="
-          if [[ -f /etc/ovs/interface-config.conf ]]; then
-            grep -E '^SWITCH_INTERFACES=' /etc/ovs/interface-config.conf
-          else
-            echo "No configuration file found. Discovery may have failed."
+          CENTOS_IMG=centos-stream.qcow2
+          if [ ! -f $CENTOS_IMG ]; then
+            curl -LO https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2
           fi
-          echo "=========================================================="
+          cp $CENTOS_IMG centos-test.qcow2
+          qemu-system-x86_64 -m 2048 -smp 2 -drive file=centos-test.qcow2,format=qcow2 \
+            -net nic -net user,hostfwd=tcp::2223-:22 -nographic &
+          VM_PID=$!
+          until nc -z localhost 2223; do sleep 5; done
+          sshpass -p centos ssh -o StrictHostKeyChecking=no -p 2223 centos@localhost 'bash -s' < ./tests/test-discover-harness.sh
+          scp -P 2223 centos@localhost:/path/to/logs/*.log ./logs/centos.log
+          kill $VM_PID
+          wait $VM_PID 2>/dev/null || true
 
-      - name: Upload Test Logs
+      - name: Upload All Logs
         uses: actions/upload-artifact@v4
         with:
-          name: ovs-discover-test-results-${{ matrix.os }}
-          path: tests/logs/*.log
+          name: ovs-discover-test-results
+          path: ./logs/*.log
