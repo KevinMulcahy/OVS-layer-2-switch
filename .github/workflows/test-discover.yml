@@ -9,7 +9,7 @@ on:
 jobs:
   test-discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # adjust if needed
+    timeout-minutes: 60
 
     steps:
       - name: Checkout Repository
@@ -19,6 +19,8 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           export MANAGEMENT_INTERFACE=eth0
+          export TEST_MODE=true
+          export FORCE=true
 
       - name: Update apt repositories
         run: sudo apt-get update -y -qq
@@ -43,6 +45,16 @@ jobs:
             dpkg -l | grep -qw $pkg && echo "$pkg installed" || echo "$pkg NOT installed"
           done
 
+      - name: Setup Dummy Interfaces
+        run: |
+          sudo modprobe dummy || true
+          sudo ip link add dummy0 type dummy || true
+          sudo ip link add dummy1 type dummy || true
+          sudo ip link set dummy0 up
+          sudo ip link set dummy1 up
+          sudo ip addr add 10.123.0.1/24 dev dummy0
+          sudo ip addr add 10.123.0.2/24 dev dummy1
+
       - name: Run Interface Discovery Test
         run: |
-          sudo bash ./discover-interfaces.sh
+          sudo TEST_MODE=true FORCE=true bash ./scripts/discover-interfaces.sh
