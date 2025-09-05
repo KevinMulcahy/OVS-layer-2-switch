@@ -1,74 +1,173 @@
 name: Series Multi-OS Discover Test
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+push:
+branches:
+- main
+pull_request:
 
 jobs:
-  series-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 180  # adjust for VM startup time
+series-test:
+runs-on: ubuntu-latest
+timeout-minutes: 180
 
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+```
+steps:
+  - name: Checkout Repository
+    uses: actions/checkout@v4
 
-      - name: Set up Environment Variables
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          export MANAGEMENT_INTERFACE=eth0
-          export TEST_MODE=true
-          export FORCE=true
-          mkdir -p ./logs
+  - name: Set up Environment Variables
+    run: |
+      export DEBIAN_FRONTEND=noninteractive
+      export MANAGEMENT_INTERFACE=eth0
+      export TEST_MODE=true
+      export FORCE=true
+      mkdir -p ./logs
 
-      - name: Install Host Dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            qemu-kvm libvirt-clients libvirt-daemon-system cloud-image-utils sshpass \
-            openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git
+  - name: Install Host Dependencies
+    run: |
+      sudo apt-get update -y
+      sudo apt-get install -y \
+        qemu-kvm libvirt-clients libvirt-daemon-system cloud-image-utils sshpass \
+        openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git netcat-openbsd
 
-      - name: Run Test on Ubuntu Host
-        run: |
-          bash ./tests/test-discover-harness.sh
-          cp ./tests/logs/*.log ./logs/ubuntu.log
+  - name: Enable KVM
+    run: |
+      sudo modprobe kvm kvm_intel || true
+      sudo chown $USER /dev/kvm || true
 
-      - name: Run Test in Fedora VM
-        run: |
-          FEDORA_IMG=fedora.qcow2
-          if [ ! -f $FEDORA_IMG ]; then
-            curl -LO https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.6.x86_64.qcow2
-          fi
-          cp $FEDORA_IMG fedora-test.qcow2
-          qemu-system-x86_64 -m 2048 -smp 2 -drive file=fedora-test.qcow2,format=qcow2 \
-            -net nic -net user,hostfwd=tcp::2222-:22 -nographic &
-          VM_PID=$!
-          until nc -z localhost 2222; do sleep 5; done
-          sshpass -p fedora ssh -o StrictHostKeyChecking=no -p 2222 fedora@localhost 'bash -s' < ./tests/test-discover-harness.sh
-          scp -P 2222 fedora@localhost:/path/to/logs/*.log ./logs/fedora.log
-          kill $VM_PID
-          wait $VM_PID 2>/dev/null || true
+  - name: Run Test on Ubuntu Host
+    run: |
+      bash ./tests/test-discover-harness.sh
+      # Copy any generated logs
+      if ls ./logs/*.log 1> /dev/null 2>&1; then
+        cp ./logs/*.log ./logs/ubuntu.log || true
+      fi
 
-      - name: Run Test in CentOS VM
-        run: |
-          CENTOS_IMG=centos-stream.qcow2
-          if [ ! -f $CENTOS_IMG ]; then
-            curl -LO https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2
-          fi
-          cp $CENTOS_IMG centos-test.qcow2
-          qemu-system-x86_64 -m 2048 -smp 2 -drive file=centos-test.qcow2,format=qcow2 \
-            -net nic -net user,hostfwd=tcp::2223-:22 -nographic &
-          VM_PID=$!
-          until nc -z localhost 2223; do sleep 5; done
-          sshpass -p centos ssh -o StrictHostKeyChecking=no -p 2223 centos@localhost 'bash -s' < ./tests/test-discover-harness.sh
-          scp -P 2223 centos@localhost:/path/to/logs/*.log ./logs/centos.log
-          kill $VM_PID
-          wait $VM_PID 2>/dev/null || true
+  - name: Prepare Cloud Images
+    run: |
+      # Download images if not cached
+      if [ ! -f fedora.qcow2 ]; then
+        curl -LO https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.6.x86_64.qcow2
+        mv Fedora-Cloud-Base-40-1.6.x86_64.qcow2 fedora.qcow2
+      fi
+      
+      if [ ! -f centos-stream.qcow2 ]; then
+        curl -LO https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2
+        mv CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2 centos-stream.qcow2
+      fi
 
-      - name: Upload All Logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: ovs-discover-test-results
-          path: ./logs/*.log
+  - name: Create Cloud-Init Config
+    run: |
+      cat > user-data << 'EOF'
+      #cloud-config
+      users:
+        - name: testuser
+          sudo: ALL=(ALL) NOPASSWD:ALL
+          shell: /bin/bash
+          ssh_authorized_keys:
+            - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... # Add your public key here
+      
+      chpasswd:
+        list: |
+          testuser:testpass
+        expire: False
+      
+      ssh_pwauth: True
+      
+      package_update: true
+      packages:
+        - curl
+        - git
+        - bash
+      EOF
+      
+      echo "instance-id: test-vm" > meta-data
+      cloud-localds cloud-init.iso user-data meta-data
+
+  - name: Run Test in Fedora VM
+    run: |
+      cp fedora.qcow2 fedora-test.qcow2
+      qemu-img resize fedora-test.qcow2 10G
+      
+      timeout 300 qemu-system-x86_64 \
+        -m 2048 -smp 2 -enable-kvm \
+        -drive file=fedora-test.qcow2,format=qcow2 \
+        -drive file=cloud-init.iso,format=raw \
+        -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+        -device virtio-net-pci,netdev=net0 \
+        -nographic -daemonize
+      
+      # Wait for SSH to be available
+      for i in {1..60}; do
+        if nc -z localhost 2222; then
+          echo "SSH is ready"
+          break
+        fi
+        echo "Waiting for SSH... ($i/60)"
+        sleep 5
+      done
+      
+      # Copy test script and run it
+      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2222 \
+        ./tests/test-discover-harness.sh testuser@localhost:/tmp/
+      
+      sshpass -p 'testpass' ssh -o StrictHostKeyChecking=no -P 2222 \
+        testuser@localhost 'chmod +x /tmp/test-discover-harness.sh && /tmp/test-discover-harness.sh'
+      
+      # Copy logs back (adjust path as needed)
+      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2222 \
+        'testuser@localhost:/tmp/logs/*.log' ./logs/ || \
+        echo "No logs found or failed to copy logs from Fedora VM"
+      
+      # Clean up VM
+      pkill -f "qemu.*fedora-test.qcow2" || true
+      sleep 5
+
+  - name: Run Test in CentOS VM
+    run: |
+      cp centos-stream.qcow2 centos-test.qcow2
+      qemu-img resize centos-test.qcow2 10G
+      
+      timeout 300 qemu-system-x86_64 \
+        -m 2048 -smp 2 -enable-kvm \
+        -drive file=centos-test.qcow2,format=qcow2 \
+        -drive file=cloud-init.iso,format=raw \
+        -netdev user,id=net0,hostfwd=tcp::2223-:22 \
+        -device virtio-net-pci,netdev=net0 \
+        -nographic -daemonize
+      
+      # Wait for SSH to be available
+      for i in {1..60}; do
+        if nc -z localhost 2223; then
+          echo "SSH is ready"
+          break
+        fi
+        echo "Waiting for SSH... ($i/60)"
+        sleep 5
+      done
+      
+      # Copy test script and run it
+      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2223 \
+        ./tests/test-discover-harness.sh testuser@localhost:/tmp/
+      
+      sshpass -p 'testpass' ssh -o StrictHostKeyChecking=no -P 2223 \
+        testuser@localhost 'chmod +x /tmp/test-discover-harness.sh && /tmp/test-discover-harness.sh'
+      
+      # Copy logs back (adjust path as needed)
+      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2223 \
+        'testuser@localhost:/tmp/logs/*.log' ./logs/ || \
+        echo "No logs found or failed to copy logs from CentOS VM"
+      
+      # Clean up VM
+      pkill -f "qemu.*centos-test.qcow2" || true
+      sleep 5
+
+  - name: Upload All Logs
+    uses: actions/upload-artifact@v4
+    if: always()
+    with:
+      name: ovs-discover-test-results
+      path: ./logs/
+      retention-days: 7
+```
