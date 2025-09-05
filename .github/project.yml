@@ -1,0 +1,48 @@
+# .github/project.yml
+name: "OVS Layer 2 Switch"
+description: "Project plan for building a dynamic Open vSwitch Layer 2 switch with CLI, REST API, and GUI management tools."
+public: false
+
+columns:
+  - name: Backlog
+  - name: To Do
+  - name: In Progress
+  - name: Review
+  - name: Done
+
+milestones:
+  - title: "Phase 1 – Foundation"
+    description: "Core scripts and documentation"
+    issues:
+      - title: "Test discover-interfaces.sh on Ubuntu, CentOS, Fedora"
+      - title: "Fix and validate systemd persistent config service"
+      - title: "Add repo structure (/scripts, /docs, /tests)"
+      - title: "Polish README.md with Quick Start"
+      - title: "Add troubleshooting guide"
+
+  - title: "Phase 2 – Management Tools"
+    description: "CLI utilities and REST API"
+    issues:
+      - title: "Create CLI wrapper (ovs-switch entrypoint)"
+      - title: "Implement REST API (FastAPI or Flask)"
+      - title: "Add API authentication (token-based)"
+      - title: "Document API in /docs/api"
+      - title: "Write automated tests for REST endpoints"
+
+  - title: "Phase 3 – GUI"
+    description: "Web-based management dashboard"
+    issues:
+      - title: "Build minimal web GUI (React + Flask backend)"
+      - title: "Add interface discovery view"
+      - title: "Implement VLAN configuration page"
+      - title: "Implement port mirroring setup page"
+      - title: "Integration tests (GUI → API → OVS)"
+
+  - title: "Phase 4 – Advanced Features & Distribution"
+    description: "Packaging, mobile app, and CI/CD"
+    issues:
+      - title: "Add configuration export/import (JSON/YAML)"
+      - title: "Implement mobile companion app (React Native/Flutter)"
+      - title: "Package as .deb and .rpm"
+      - title: "Create Docker image for lab deployments"
+      - title: "Add GitHub Actions CI/CD (build, test, lint)"
