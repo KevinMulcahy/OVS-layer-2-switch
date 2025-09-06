@@ -57,16 +57,18 @@ jobs:
         run: |
           IMAGE_URL=""
           if [[ "${{ matrix.os_type }}" == "fedora" ]]; then
-            IMAGE_URL=$(curl -s https://getfedora.org/en/cloud/download/ | \
-              grep -oP 'https://download.fedoraproject.org/pub/fedora/linux/releases/\d+/Cloud/x86_64/images/Fedora-Cloud-Base-\d+-\d+\.\d+\.x86_64\.qcow2' | head -1)
+            # Get latest Fedora release number dynamically
+            LATEST_FEDORA=$(curl -s https://getfedora.org/en/cloud/download/ | grep -oP 'Fedora \d+' | grep -oP '\d+' | head -1)
+            IMAGE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/$LATEST_FEDORA/Cloud/x86_64/images/Fedora-Cloud-Base-$LATEST_FEDORA-1.0.x86_64.qcow2"
           elif [[ "${{ matrix.os_type }}" == "centos" ]]; then
-            IMAGE_URL=$(curl -s https://cloud.centos.org/centos/9-stream/x86_64/images/ | \
-              grep -oP 'https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest\.x86_64\.qcow2' | head -1)
+            IMAGE_URL="https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
           fi
+
           if [[ -z "$IMAGE_URL" ]]; then
             echo "❌ Failed to determine latest image URL"
             exit 1
           fi
+
           echo "Latest image URL: $IMAGE_URL"
           echo "image_url=$IMAGE_URL" >> $GITHUB_ENV
 
