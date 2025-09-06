@@ -1,173 +1,505 @@
-name: Series Multi-OS Discover Test
+name: Test Production Discover Interfaces Script
 
 on:
 push:
-branches:
-- main
+branches: [ main ]
 pull_request:
+branches: [ main ]
+workflow_dispatch:
 
 jobs:
-series-test:
+test-discover-script:
 runs-on: ubuntu-latest
-timeout-minutes: 180
+timeout-minutes: 45
 
 ```
+strategy:
+  fail-fast: false
+  matrix:
+    include:
+      - name: "Ubuntu-22.04-Host"
+        type: "host"
+        setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
+      - name: "Ubuntu-22.04-VM"
+        type: "vm"
+        image_url: "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+        username: "ubuntu"
+        setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
+      - name: "Fedora-39-VM"
+        type: "vm"
+        image_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-39-1.5.qcow2"
+        username: "fedora"
+        setup_cmd: "sudo dnf install -y openvswitch"
+      - name: "Rocky-9-VM"
+        type: "vm"
+        image_url: "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud.latest.x86_64.qcow2"
+        username: "rocky"
+        setup_cmd: "sudo dnf install -y epel-release && sudo dnf install -y openvswitch"
+
 steps:
   - name: Checkout Repository
     uses: actions/checkout@v4
 
-  - name: Set up Environment Variables
-    run: |
-      export DEBIAN_FRONTEND=noninteractive
-      export MANAGEMENT_INTERFACE=eth0
-      export TEST_MODE=true
-      export FORCE=true
-      mkdir -p ./logs
-
   - name: Install Host Dependencies
     run: |
-      sudo apt-get update -y
+      sudo apt-get update -qq
       sudo apt-get install -y \
-        qemu-kvm libvirt-clients libvirt-daemon-system cloud-image-utils sshpass \
-        openvswitch-switch openvswitch-common bridge-utils net-tools tcpdump ethtool curl jq git netcat-openbsd
+        qemu-system-x86 qemu-utils cloud-image-utils \
+        sshpass wget genisoimage netcat-openbsd
 
-  - name: Enable KVM
+  - name: Setup Test Environment
     run: |
-      sudo modprobe kvm kvm_intel || true
-      sudo chown $USER /dev/kvm || true
-
-  - name: Run Test on Ubuntu Host
-    run: |
-      bash ./tests/test-discover-harness.sh
-      # Copy any generated logs
-      if ls ./logs/*.log 1> /dev/null 2>&1; then
-        cp ./logs/*.log ./logs/ubuntu.log || true
-      fi
-
-  - name: Prepare Cloud Images
-    run: |
-      # Download images if not cached
-      if [ ! -f fedora.qcow2 ]; then
-        curl -LO https://download.fedoraproject.org/pub/fedora/linux/releases/40/Cloud/x86_64/images/Fedora-Cloud-Base-40-1.6.x86_64.qcow2
-        mv Fedora-Cloud-Base-40-1.6.x86_64.qcow2 fedora.qcow2
+      # Create directories
+      mkdir -p logs vm-images
+      
+      # Verify the actual script exists
+      if [[ ! -f "scripts/discover-interfaces.sh" ]]; then
+        echo "❌ ERROR: scripts/discover-interfaces.sh not found!"
+        echo "Available files:"
+        find . -name "*.sh" -type f
+        exit 1
       fi
       
-      if [ ! -f centos-stream.qcow2 ]; then
-        curl -LO https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2
-        mv CentOS-Stream-9-GenericCloud-9.2.0.x86_64.qcow2 centos-stream.qcow2
-      fi
+      # Show script info
+      echo "✅ Found production script:"
+      ls -la scripts/discover-interfaces.sh
+      echo "Script size: $(wc -l < scripts/discover-interfaces.sh) lines"
 
-  - name: Create Cloud-Init Config
+  - name: Test on Ubuntu Host
+    if: matrix.type == 'host'
     run: |
-      cat > user-data << 'EOF'
+      echo "=== Testing Production Script on Ubuntu Host ==="
+      
+      # Show system information
+      echo "System: $(lsb_release -ds)"
+      echo "Kernel: $(uname -r)"
+      echo "User: $(whoami) (UID: $EUID)"
+      
+      # Install OVS if specified
+      if [[ -n "${{ matrix.setup_cmd }}" ]]; then
+        echo "Installing dependencies..."
+        ${{ matrix.setup_cmd }}
+      fi
+      
+      # Show initial network state
+      echo "=== Initial Network State ==="
+      ip -br link show
+      echo "Total interfaces: $(ip -br link show | wc -l)"
+      
+      # Create additional test interfaces to give the script more to work with
+      echo "=== Creating Additional Test Interfaces ==="
+      # Try multiple methods to create interfaces
+      
+      # Method 1: Dummy interfaces
+      if sudo modprobe dummy numdummies=3 2>/dev/null; then
+        echo "✅ Loaded dummy module with 3 interfaces"
+      else
+        echo "⚠️ Could not load dummy module"
+      fi
+      
+      # Method 2: Manual dummy interfaces
+      for i in {0..2}; do
+        if sudo ip link add test-dummy$i type dummy 2>/dev/null; then
+          sudo ip link set test-dummy$i up
+          echo "✅ Created test-dummy$i"
+        else
+          echo "⚠️ Could not create test-dummy$i"
+        fi
+      done
+      
+      # Method 3: Bridge interfaces (these won't be used by OVS but test filtering)
+      if sudo ip link add test-br0 type bridge 2>/dev/null; then
+        echo "✅ Created test bridge test-br0"
+      else
+        echo "⚠️ Could not create test bridge"
+      fi
+      
+      echo "=== Final Interface List Before Test ==="
+      ip -br link show
+      echo "Available for OVS: $(ip -br link show | grep -v lo | grep -v docker | grep -v br- | wc -l) interfaces"
+      
+      # Run the actual production script
+      echo "=== Running Production Script ==="
+      LOG_FILE="logs/${{ matrix.name }}.log"
+      
+      {
+        echo "=== Production Script Test Log ==="
+        echo "Date: $(date)"
+        echo "Host: $(hostname)"
+        echo "OS: $(lsb_release -ds)"
+        echo "Script: scripts/discover-interfaces.sh"
+        echo "Environment: TEST_MODE=true FORCE=true"
+        echo "=== Script Output Begin ==="
+        
+        # Run with production settings but in test mode
+        sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
+          bash scripts/discover-interfaces.sh
+        
+        echo "=== Script Output End ==="
+        echo "Exit code: $?"
+        
+      } 2>&1 | tee "$LOG_FILE"
+      
+      SCRIPT_EXIT_CODE=${PIPESTATUS[1]}
+      echo "Production script exit code: $SCRIPT_EXIT_CODE"
+      
+      # Analyze results
+      echo "=== Results Analysis ==="
+      if [[ -f /etc/ovs/interface-config.conf ]]; then
+        echo "✅ Configuration file created successfully"
+        echo "Configuration content:"
+        cat /etc/ovs/interface-config.conf
+        
+        # Parse and validate configuration
+        source /etc/ovs/interface-config.conf
+        echo "Management Interface: $MANAGEMENT_INTERFACE"
+        echo "Switch Interfaces: ${SWITCH_INTERFACES[*]}"
+        echo "Bridge Name: $BRIDGE_NAME"
+        echo "Total Interfaces: $TOTAL_INTERFACES"
+        
+      else
+        echo "❌ No configuration file created"
+        SCRIPT_EXIT_CODE=1
+      fi
+      
+      # Cleanup test interfaces
+      echo "=== Cleaning Up Test Interfaces ==="
+      for i in {0..2}; do
+        sudo ip link delete test-dummy$i 2>/dev/null || true
+      done
+      sudo ip link delete test-br0 2>/dev/null || true
+      
+      exit $SCRIPT_EXIT_CODE
+
+  - name: Download and Prepare VM Image
+    if: matrix.type == 'vm'
+    run: |
+      echo "=== Preparing ${{ matrix.name }} VM Image ==="
+      
+      IMAGE_FILE="vm-images/$(basename '${{ matrix.image_url }}')"
+      WORK_IMAGE="vm-images/test-${{ matrix.name }}.qcow2"
+      
+      # Download image if not cached
+      if [[ ! -f "$IMAGE_FILE" ]]; then
+        echo "Downloading ${{ matrix.name }} image..."
+        wget -q --show-progress -O "$IMAGE_FILE" "${{ matrix.image_url }}"
+      else
+        echo "Using cached image: $IMAGE_FILE"
+      fi
+      
+      # Create working copy
+      echo "Creating working VM image..."
+      cp "$IMAGE_FILE" "$WORK_IMAGE"
+      qemu-img resize "$WORK_IMAGE" 10G
+      
+      echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
+      echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
+
+  - name: Create Cloud-Init Configuration
+    if: matrix.type == 'vm'
+    run: |
+      # Create cloud-init user data
+      cat > user-data << EOF
       #cloud-config
       users:
-        - name: testuser
+        - name: ${{ matrix.username }}
           sudo: ALL=(ALL) NOPASSWD:ALL
           shell: /bin/bash
-          ssh_authorized_keys:
-            - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... # Add your public key here
+          lock_passwd: false
+          # Password: 'testpass123'
+          passwd: \$6\$rounds=4096\$saltsalt\$L9F.sdUps6Ff3.gOr2weMRgj5ixW3.2V4wuiOhVCz6CN8Yk4Va1eGYstNdJQlJy/0iCJt2P4/6KHaL1xMGRWQ.
       
-      chpasswd:
-        list: |
-          testuser:testpass
-        expire: False
+      ssh_pwauth: true
+      disable_root: false
       
-      ssh_pwauth: True
-      
+      # Install basic packages
       package_update: true
       packages:
         - curl
-        - git
-        - bash
+        - wget
+        - sudo
+        - iputils-ping
+      
+      # Enable SSH
+      runcmd:
+        - systemctl enable ssh || systemctl enable sshd
+        - systemctl start ssh || systemctl start sshd
+      
+      # Set up networking
+      write_files:
+        - path: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+          content: |
+            network: {config: disabled}
       EOF
       
-      echo "instance-id: test-vm" > meta-data
-      cloud-localds cloud-init.iso user-data meta-data
+      # Create meta-data
+      echo "instance-id: test-vm-${{ matrix.name }}-$(date +%s)" > meta-data
+      echo "local-hostname: test-${{ matrix.name }}" >> meta-data
+      
+      # Create cloud-init ISO
+      genisoimage -output cloud-init.iso -volid cidata -joliet -rock user-data meta-data
 
-  - name: Run Test in Fedora VM
+  - name: Start VM and Run Test
+    if: matrix.type == 'vm'
     run: |
-      cp fedora.qcow2 fedora-test.qcow2
-      qemu-img resize fedora-test.qcow2 10G
+      echo "=== Starting ${{ matrix.name }} VM ==="
       
-      timeout 300 qemu-system-x86_64 \
-        -m 2048 -smp 2 -enable-kvm \
-        -drive file=fedora-test.qcow2,format=qcow2 \
-        -drive file=cloud-init.iso,format=raw \
-        -netdev user,id=net0,hostfwd=tcp::2222-:22 \
+      # Start VM in background
+      qemu-system-x86_64 \
+        -m 2048 -smp 2 \
+        -cpu host -enable-kvm \
+        -drive file="$VM_IMAGE",format=qcow2,if=virtio \
+        -drive file=cloud-init.iso,format=raw,if=virtio \
+        -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22 \
         -device virtio-net-pci,netdev=net0 \
-        -nographic -daemonize
+        -display none -daemonize \
+        -pidfile vm.pid
       
-      # Wait for SSH to be available
-      for i in {1..60}; do
-        if nc -z localhost 2222; then
-          echo "SSH is ready"
-          break
+      VM_PID=$(cat vm.pid)
+      echo "VM started with PID: $VM_PID on SSH port $SSH_PORT"
+      
+      # Wait for VM to boot and SSH to be ready
+      echo "Waiting for VM to boot (timeout: 5 minutes)..."
+      SUCCESS=false
+      for attempt in {1..60}; do
+        if nc -z localhost $SSH_PORT 2>/dev/null; then
+          echo "SSH port is open, testing connection..."
+          if sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+            -p $SSH_PORT ${{ matrix.username }}@localhost 'echo "SSH_OK"' >/dev/null 2>&1; then
+            echo "✅ VM is ready after $attempt attempts ($(($attempt * 5)) seconds)"
+            SUCCESS=true
+            break
+          fi
         fi
-        echo "Waiting for SSH... ($i/60)"
+        echo "  Attempt $attempt/60 - VM not ready yet..."
         sleep 5
       done
       
-      # Copy test script and run it
-      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2222 \
-        ./tests/test-discover-harness.sh testuser@localhost:/tmp/
+      if [[ "$SUCCESS" != "true" ]]; then
+        echo "❌ VM failed to boot or SSH failed within 5 minutes"
+        kill $VM_PID 2>/dev/null || true
+        exit 1
+      fi
       
-      sshpass -p 'testpass' ssh -o StrictHostKeyChecking=no -P 2222 \
-        testuser@localhost 'chmod +x /tmp/test-discover-harness.sh && /tmp/test-discover-harness.sh'
+      # VM is ready, run the test
+      echo "=== Running Production Script Test in ${{ matrix.name }} VM ==="
       
-      # Copy logs back (adjust path as needed)
-      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2222 \
-        'testuser@localhost:/tmp/logs/*.log' ./logs/ || \
-        echo "No logs found or failed to copy logs from Fedora VM"
+      # Copy the production script to VM
+      sshpass -p 'testpass123' scp -o StrictHostKeyChecking=no -P $SSH_PORT \
+        scripts/discover-interfaces.sh ${{ matrix.username }}@localhost:/tmp/discover-interfaces.sh
       
-      # Clean up VM
-      pkill -f "qemu.*fedora-test.qcow2" || true
-      sleep 5
-
-  - name: Run Test in CentOS VM
-    run: |
-      cp centos-stream.qcow2 centos-test.qcow2
-      qemu-img resize centos-test.qcow2 10G
-      
-      timeout 300 qemu-system-x86_64 \
-        -m 2048 -smp 2 -enable-kvm \
-        -drive file=centos-test.qcow2,format=qcow2 \
-        -drive file=cloud-init.iso,format=raw \
-        -netdev user,id=net0,hostfwd=tcp::2223-:22 \
-        -device virtio-net-pci,netdev=net0 \
-        -nographic -daemonize
-      
-      # Wait for SSH to be available
-      for i in {1..60}; do
-        if nc -z localhost 2223; then
-          echo "SSH is ready"
-          break
+      # Run test inside VM
+      sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -p $SSH_PORT \
+        ${{ matrix.username }}@localhost bash << 'VM_TEST_SCRIPT'
+        
+        set -e
+        
+        echo "=== ${{ matrix.name }} VM Test Environment ==="
+        echo "OS Info:"
+        cat /etc/os-release | head -5
+        echo "Kernel: $(uname -r)"
+        echo "Hostname: $(hostname)"
+        echo "User: $(whoami)"
+        
+        # Install dependencies
+        echo "=== Installing Dependencies ==="
+        ${{ matrix.setup_cmd }}
+        
+        # Show initial network state
+        echo "=== Initial Network Interfaces ==="
+        ip -br link show
+        
+        # Try to create additional test interfaces
+        echo "=== Creating Test Interfaces ==="
+        
+        # Load dummy module if available
+        if sudo modprobe dummy numdummies=2 2>/dev/null; then
+          echo "✅ Loaded dummy module"
+        else
+          echo "⚠️ Could not load dummy module"
         fi
-        echo "Waiting for SSH... ($i/60)"
-        sleep 5
-      done
+        
+        # Create manual dummy interfaces
+        for i in {0..1}; do
+          if sudo ip link add vm-test$i type dummy 2>/dev/null; then
+            sudo ip link set vm-test$i up
+            echo "✅ Created vm-test$i"
+          else
+            echo "⚠️ Could not create vm-test$i"
+          fi
+        done
+        
+        echo "=== Final Interface List ==="
+        ip -br link show
+        
+        # Make script executable and run it
+        echo "=== Running Production discover-interfaces.sh Script ==="
+        chmod +x /tmp/discover-interfaces.sh
+        
+        # Run with environment variables for testing
+        sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
+          bash /tmp/discover-interfaces.sh
+        
+        SCRIPT_EXIT=$?
+        echo "Script exit code: $SCRIPT_EXIT"
+        
+        # Show results
+        echo "=== Test Results ==="
+        if [[ -f /etc/ovs/interface-config.conf ]]; then
+          echo "✅ Configuration file created:"
+          cat /etc/ovs/interface-config.conf
+        else
+          echo "❌ No configuration file found"
+          exit 1
+        fi
+        
+        # Cleanup
+        echo "=== Cleaning Up ==="
+        for i in {0..1}; do
+          sudo ip link delete vm-test$i 2>/dev/null || true
+        done
+        
+        exit $SCRIPT_EXIT
+        
+      VM_TEST_SCRIPT
       
-      # Copy test script and run it
-      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2223 \
-        ./tests/test-discover-harness.sh testuser@localhost:/tmp/
+      TEST_EXIT_CODE=$?
       
-      sshpass -p 'testpass' ssh -o StrictHostKeyChecking=no -P 2223 \
-        testuser@localhost 'chmod +x /tmp/test-discover-harness.sh && /tmp/test-discover-harness.sh'
+      # Copy results back if they exist
+      echo "=== Retrieving Test Results ==="
+      sshpass -p 'testpass123' scp -o StrictHostKeyChecking=no -P $SSH_PORT \
+        '${{ matrix.username }}@localhost:/etc/ovs/interface-config.conf' \
+        "logs/${{ matrix.name }}-config.conf" 2>/dev/null || \
+        echo "No configuration file to retrieve"
       
-      # Copy logs back (adjust path as needed)
-      sshpass -p 'testpass' scp -o StrictHostKeyChecking=no -P 2223 \
-        'testuser@localhost:/tmp/logs/*.log' ./logs/ || \
-        echo "No logs found or failed to copy logs from CentOS VM"
+      # Cleanup VM
+      echo "=== VM Cleanup ==="
+      kill $VM_PID 2>/dev/null || true
+      sleep 3
+      kill -9 $VM_PID 2>/dev/null || true
+      rm -f vm.pid
       
-      # Clean up VM
-      pkill -f "qemu.*centos-test.qcow2" || true
-      sleep 5
+      exit $TEST_EXIT_CODE
 
-  - name: Upload All Logs
+  - name: Generate Test Report
+    if: always()
+    run: |
+      echo "=== Test Report: ${{ matrix.name }} ===" | tee logs/report-${{ matrix.name }}.md
+      echo "Date: $(date)" | tee -a logs/report-${{ matrix.name }}.md
+      echo "Test Type: ${{ matrix.type }}" | tee -a logs/report-${{ matrix.name }}.md
+      echo "" | tee -a logs/report-${{ matrix.name }}.md
+      
+      # Determine success/failure
+      if [[ -f "logs/${{ matrix.name }}-config.conf" ]] || [[ -f "/etc/ovs/interface-config.conf" ]]; then
+        echo "**Status: ✅ SUCCESS**" | tee -a logs/report-${{ matrix.name }}.md
+        echo "" | tee -a logs/report-${{ matrix.name }}.md
+        echo "Configuration file was created successfully." | tee -a logs/report-${{ matrix.name }}.md
+        echo "" | tee -a logs/report-${{ matrix.name }}.md
+        
+        # Show configuration
+        CONFIG_FILE=""
+        [[ -f "logs/${{ matrix.name }}-config.conf" ]] && CONFIG_FILE="logs/${{ matrix.name }}-config.conf"
+        [[ -f "/etc/ovs/interface-config.conf" ]] && CONFIG_FILE="/etc/ovs/interface-config.conf"
+        
+        if [[ -n "$CONFIG_FILE" ]]; then
+          echo "**Generated Configuration:**" | tee -a logs/report-${{ matrix.name }}.md
+          echo '```bash' | tee -a logs/report-${{ matrix.name }}.md
+          cat "$CONFIG_FILE" | tee -a logs/report-${{ matrix.name }}.md
+          echo '```' | tee -a logs/report-${{ matrix.name }}.md
+        fi
+      else
+        echo "**Status: ❌ FAILED**" | tee -a logs/report-${{ matrix.name }}.md
+        echo "" | tee -a logs/report-${{ matrix.name }}.md
+        echo "The script did not create a configuration file." | tee -a logs/report-${{ matrix.name }}.md
+        
+        # Show log if available
+        if [[ -f "logs/${{ matrix.name }}.log" ]]; then
+          echo "" | tee -a logs/report-${{ matrix.name }}.md
+          echo "**Error Log:**" | tee -a logs/report-${{ matrix.name }}.md
+          echo '```' | tee -a logs/report-${{ matrix.name }}.md
+          tail -20 "logs/${{ matrix.name }}.log" | tee -a logs/report-${{ matrix.name }}.md
+          echo '```' | tee -a logs/report-${{ matrix.name }}.md
+        fi
+      fi
+
+  - name: Upload Test Artifacts
     uses: actions/upload-artifact@v4
     if: always()
     with:
-      name: ovs-discover-test-results
-      path: ./logs/
+      name: test-results-${{ matrix.name }}
+      path: |
+        logs/
+        !vm-images/
       retention-days: 7
+```
+
+generate-summary:
+needs: test-discover-script
+runs-on: ubuntu-latest
+if: always()
+
+```
+steps:
+  - name: Download All Test Results
+    uses: actions/download-artifact@v4
+    with:
+      path: all-results
+
+  - name: Generate Summary Report
+    run: |
+      echo "# Production discover-interfaces.sh Test Results" > SUMMARY.md
+      echo "" >> SUMMARY.md
+      echo "**Test Date:** $(date)" >> SUMMARY.md
+      echo "**Repository:** $GITHUB_REPOSITORY" >> SUMMARY.md
+      echo "**Commit:** $GITHUB_SHA" >> SUMMARY.md
+      echo "" >> SUMMARY.md
+      
+      echo "## Test Results by Platform" >> SUMMARY.md
+      echo "" >> SUMMARY.md
+      
+      SUCCESS_COUNT=0
+      TOTAL_COUNT=0
+      
+      # Process each result
+      for result_dir in all-results/test-results-*/; do
+        if [[ -d "$result_dir" ]]; then
+          TOTAL_COUNT=$((TOTAL_COUNT + 1))
+          PLATFORM_NAME=$(basename "$result_dir" | sed 's/test-results-//')
+          
+          if [[ -f "$result_dir/report-$PLATFORM_NAME.md" ]]; then
+            echo "### $PLATFORM_NAME" >> SUMMARY.md
+            echo "" >> SUMMARY.md
+            cat "$result_dir/report-$PLATFORM_NAME.md" | tail -n +4 >> SUMMARY.md
+            echo "" >> SUMMARY.md
+            
+            # Count successes
+            if grep -q "SUCCESS" "$result_dir/report-$PLATFORM_NAME.md"; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+            fi
+          else
+            echo "### $PLATFORM_NAME" >> SUMMARY.md
+            echo "**Status: ❌ NO REPORT GENERATED**" >> SUMMARY.md
+            echo "" >> SUMMARY.md
+          fi
+        fi
+      done
+      
+      # Add summary at the top
+      sed -i "/^## Test Results by Platform/i\\
+      ## Summary\\
+      \\
+      **Overall Success Rate:** $SUCCESS_COUNT/$TOTAL_COUNT platforms\\
+      \\
+      $(if [[ $SUCCESS_COUNT -eq $TOTAL_COUNT ]]; then echo '✅ **All tests passed!**'; else echo '⚠️ **Some tests failed**'; fi)\\
+      \\
+      " SUMMARY.md
+      
+      echo "=== SUMMARY REPORT ==="
+      cat SUMMARY.md
+
+  - name: Upload Summary Report  
+    uses: actions/upload-artifact@v4
+    with:
+      name: test-summary-report
+      path: SUMMARY.md
 ```
