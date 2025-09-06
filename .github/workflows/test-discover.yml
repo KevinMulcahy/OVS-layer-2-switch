@@ -92,7 +92,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vm-image
-          path: vm-images   # downloaded VM stays in vm-images, repo files intact
+          path: vm-images   # VM image goes here; repo files remain intact
 
       - name: Verify files
         run: |
@@ -115,4 +115,4 @@ jobs:
       - name: Run discovery and switch tests
         run: |
           set -e
-          sudo bash ./tests/test-discovery-harness.sh
+          sudo bash ./tests/test-discover-harness.sh
