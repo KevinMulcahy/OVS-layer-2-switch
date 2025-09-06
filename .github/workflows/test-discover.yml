@@ -94,14 +94,15 @@ jobs:
           name: vm-image
           path: vm-images   # VM image goes here; repo files remain intact
 
-      - name: Verify files
+      - name: Sanitize shell scripts
         run: |
-          echo "Listing repo root:"
-          ls -l
-          echo "Listing tests folder:"
-          ls -l ./tests
-          echo "Listing vm-images folder:"
-          ls -l ./vm-images
+          echo "=== Sanitizing all .sh scripts ==="
+          find scripts tests -type f -name "*.sh" -exec sed -i 's/[“”]/"/g' {} +
+          find scripts tests -type f -name "*.sh" -exec sed -i "s/[‘’]/'/g" {} +
+          find scripts tests -type f -name "*.sh" -exec sed -i 's/[^\x00-\x7F]/ /g' {} +
+          echo "Checking for remaining non-ASCII characters..."
+          find scripts tests -type f -name "*.sh" -exec grep --color='auto' -P -n "[^\x00-\x7F]" {} + || echo "No non-ASCII characters remain."
+          echo "=== Shell scripts sanitized successfully ==="
 
       - name: Set VM_IMAGE environment variable
         run: echo "VM_IMAGE=vm-images/$(ls vm-images)" >> $GITHUB_ENV
