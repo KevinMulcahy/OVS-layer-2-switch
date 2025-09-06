@@ -21,7 +21,7 @@ jobs:
             setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
           - name: "Fedora-39-VM"
             type: "vm"
-            image_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-39-1.5.qcow2"
+            image_url: "https://dl.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-39-1.5.qcow2"
             username: "fedora"
             setup_cmd: "sudo dnf install -y openvswitch"
           - name: "CentOS-Stream-9-VM"
@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             qemu-system-x86 qemu-utils cloud-image-utils \
-            sshpass wget genisoimage netcat-openbsd
+            sshpass wget genisoimage netcat-openbsd curl
 
       - name: Setup Test Environment
         run: |
@@ -63,11 +63,18 @@ jobs:
         run: |
           IMAGE_FILE="vm-images/$(basename '${{ matrix.image_url }}')"
           WORK_IMAGE="vm-images/test-${{ matrix.name }}.qcow2"
+
           if [[ ! -f "$IMAGE_FILE" ]]; then
-            wget -q --show-progress -O "$IMAGE_FILE" "${{ matrix.image_url }}"
+            echo "Downloading ${{ matrix.name }} image..."
+            curl -L --fail -o "$IMAGE_FILE" "${{ matrix.image_url }}"
           fi
+
+          echo "Verifying image..."
+          qemu-img info "$IMAGE_FILE" || { echo "❌ Invalid image file"; exit 1; }
+
           cp "$IMAGE_FILE" "$WORK_IMAGE"
           qemu-img resize "$WORK_IMAGE" 10G
+
           echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
           echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
 
@@ -102,7 +109,7 @@ jobs:
         if: matrix.type == 'vm'
         run: |
           qemu-system-x86_64 \
-            -m 2048 -smp 2 -cpu host -enable-kvm \
+            -m 2048 -smp 2 -cpu qemu64 \
             -drive file="$VM_IMAGE",format=qcow2,if=virtio \
             -drive file=cloud-init.iso,format=raw,if=virtio \
             -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22 \
