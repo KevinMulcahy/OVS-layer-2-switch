@@ -68,7 +68,7 @@ jobs:
           echo "Cleaning up old VM images..."
           ls -1tr vm-images/test-*.qcow2 | head -n -3 | xargs -r rm -f || true
 
-          # Set outputs and environment variables
+          # Set outputs
           echo "VM_IMAGE_NAME=$(basename "$WORK_IMAGE")" >> $GITHUB_OUTPUT
           SSH_PORT=$((2220 + RANDOM % 100))
           echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
@@ -107,8 +107,10 @@ jobs:
           echo "SSH Port: $SSH_PORT"
           qemu-img info "$VM_IMAGE"
 
+      - name: List tests folder
+        run: ls -l ./tests
+
       - name: Run discovery and switch tests
         run: |
           set -e
-          sudo bash ./scripts/test-discover-interfaces.sh
-          sudo bash ./scripts/test-discover.yaml
+          sudo bash ./tests/test-discovery-harness.sh
