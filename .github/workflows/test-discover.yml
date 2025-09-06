@@ -8,119 +8,75 @@ on:
   workflow_dispatch:
 
 jobs:
-  prepare-vm:
-    name: Prepare VM Image
+  run-tests:
+    name: Run OVS Tests on multiple OSs
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os-image:
+          - centos-9-stream
+          - ubuntu-24.04
+          - fedora-39
     env:
-      IMAGE_URL: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2
-    outputs:
-      vm_image_name: ${{ steps.set-env.outputs.vm_image_name }}
-      ssh_port: ${{ steps.set-env.outputs.ssh_port }}
+      SSH_PORT: $((2220 + RANDOM % 100))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install qemu-img and curl
+      - name: Set IMAGE_URL based on OS
+        run: |
+          case "${{ matrix.os-image }}" in
+            "centos-9-stream")
+              echo "IMAGE_URL=https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2" >> $GITHUB_ENV
+              ;;
+            "ubuntu-24.04")
+              echo "IMAGE_URL=https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img" >> $GITHUB_ENV
+              ;;
+            "fedora-39")
+              echo "IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-39-1.5.x86_64.qcow2" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
 
-      - name: Ensure vm-images directory exists
-        run: mkdir -p vm-images
+      - name: Ensure vm-images and logs directories exist
+        run: mkdir -p vm-images logs
 
-      - name: Cache base VM image
-        id: cache-vm
-        uses: actions/cache@v3
-        with:
-          path: vm-images/base.qcow2
-          key: vm-image-base-${{ hashFiles('scripts/prepare-vm.sh') || '' }}
-          restore-keys: |
-            vm-image-base-
-
-      - name: Download, verify, and prepare VM image
-        id: set-env
+      - name: Download and prepare VM
         run: |
-          set -e
+          IMAGE_FILE="vm-images/$(basename $IMAGE_URL)"
+          WORK_IMAGE="vm-images/test-${{ matrix.os-image }}-$(date +%s).qcow2"
 
-          if [[ -z "$IMAGE_URL" ]]; then
-              echo "❌ IMAGE_URL is not set"
-              exit 1
-          fi
-
-          BASE_IMAGE="vm-images/base.qcow2"
-          WORK_IMAGE="vm-images/test-$(basename "$IMAGE_URL" .qcow2)-$(date +%s).qcow2"
-
-          if [[ ! -f "$BASE_IMAGE" ]]; then
-              echo "Downloading base VM image..."
-              curl -L --fail -o "$BASE_IMAGE" "$IMAGE_URL"
+          if [[ ! -f "$IMAGE_FILE" ]]; then
+            echo "Downloading VM image for ${{ matrix.os-image }}..."
+            curl -L --fail -o "$IMAGE_FILE" "$IMAGE_URL"
           else
-              echo "Using cached base image: $BASE_IMAGE"
+            echo "Using cached image: $IMAGE_FILE"
           fi
 
           echo "Verifying image..."
-          qemu-img info "$BASE_IMAGE" || { echo "❌ Invalid image file"; exit 1; }
+          qemu-img info "$IMAGE_FILE" || { echo "❌ Invalid image file"; exit 1; }
 
-          cp "$BASE_IMAGE" "$WORK_IMAGE"
+          cp "$IMAGE_FILE" "$WORK_IMAGE"
           qemu-img resize "$WORK_IMAGE" 10G
 
-          echo "Cleaning up old VM images..."
-          ls -1tr vm-images/test-*.qcow2 | head -n -3 | xargs -r rm -f || true
-
-          # Set outputs
-          echo "VM_IMAGE_NAME=$(basename "$WORK_IMAGE")" >> $GITHUB_OUTPUT
-          SSH_PORT=$((2220 + RANDOM % 100))
-          echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
-
-      - name: Upload VM image artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vm-image
-          path: ${{ github.workspace }}/vm-images/${{ steps.set-env.outputs.vm_image_name }}
-
-  run-tests:
-    name: Run OVS Tests
-    runs-on: ubuntu-latest
-    needs: prepare-vm
-    env:
-      SSH_PORT: ${{ needs.prepare-vm.outputs.ssh_port }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Install qemu-img
-        run: sudo apt-get update && sudo apt-get install -y qemu-utils
-
-      - name: Download VM image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: vm-image
-          path: vm-images   # VM image goes here; repo files remain intact
+          echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
 
       - name: Sanitize shell scripts
         run: |
-          echo "=== Sanitizing all .sh scripts ==="
           find scripts tests -type f -name "*.sh" -exec sed -i 's/[“”]/"/g' {} +
           find scripts tests -type f -name "*.sh" -exec sed -i "s/[‘’]/'/g" {} +
           find scripts tests -type f -name "*.sh" -exec sed -i 's/[^\x00-\x7F]/ /g' {} +
-          echo "Checking for remaining non-ASCII characters..."
-          find scripts tests -type f -name "*.sh" -exec grep --color='auto' -P -n "[^\x00-\x7F]" {} + || echo "No non-ASCII characters remain."
-          echo "=== Shell scripts sanitized successfully ==="
 
-      - name: Set VM_IMAGE environment variable
-        run: echo "VM_IMAGE=vm-images/$(ls vm-images)" >> $GITHUB_ENV
-
-      - name: Display VM info
-        run: |
-          echo "✅ Using VM image: $VM_IMAGE"
-          echo "SSH Port: $SSH_PORT"
-          qemu-img info "$VM_IMAGE"
-
-      - name: Run discovery and switch tests and save logs
+      - name: Run discovery and switch tests
         run: |
           set -e
-          mkdir -p logs
-          sudo bash ./tests/test-discover-harness.sh > logs/test-discover.log 2>&1
+          LOG_FILE=logs/test-${{ matrix.os-image }}.log
+          sudo bash ./tests/test-discover-harness.sh > "$LOG_FILE" 2>&1
 
-      - name: Upload test logs artifact
+      - name: Upload test log artifact
         uses: actions/upload-artifact@v4
         with:
-          name: test-logs
-          path: logs/test-discover.log
+          name: test-logs-${{ matrix.os-image }}
+          path: logs/test-${{ matrix.os-image }}.log
