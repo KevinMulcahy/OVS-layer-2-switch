@@ -9,6 +9,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Debug file presence
+        run: |
+          echo "Listing contents of the working directory:"
+          ls -al
+          echo "Listing contents of the 'scripts' directory:"
+          ls -al scripts
+
       - name: List all files
         run: find . -name "*.sh"
 
