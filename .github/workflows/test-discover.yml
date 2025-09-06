@@ -10,7 +10,7 @@ on:
 jobs:
   test-discover-script:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
@@ -19,14 +19,14 @@ jobs:
           - name: "Ubuntu-22.04-Host"
             type: "host"
             setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
-          - name: "Fedora-39-VM"
+          - name: "Fedora-Latest-VM"
             type: "vm"
-            image_url: "https://dl.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-39-1.5.qcow2"
+            os_type: "fedora"
             username: "fedora"
             setup_cmd: "sudo dnf install -y openvswitch"
-          - name: "CentOS-Stream-9-VM"
+          - name: "CentOS-Stream-Latest-VM"
             type: "vm"
-            image_url: "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
+            os_type: "centos"
             username: "centos"
             setup_cmd: "sudo dnf install -y epel-release && sudo dnf install -y openvswitch"
 
@@ -39,7 +39,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             qemu-system-x86 qemu-utils cloud-image-utils \
-            sshpass wget genisoimage netcat-openbsd curl
+            sshpass wget genisoimage netcat-openbsd curl jq
 
       - name: Setup Test Environment
         run: |
@@ -51,22 +51,34 @@ jobs:
           chmod +x scripts/discover-interfaces.sh
           echo "✅ Found production script: scripts/discover-interfaces.sh"
 
-      - name: Test on Ubuntu Host
-        if: matrix.type == 'host'
+      - name: Determine Latest Cloud Image URL
+        if: matrix.type == 'vm'
+        id: get_image
         run: |
-          echo "=== Testing Production Script on Ubuntu Host ==="
-          sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
-            bash scripts/discover-interfaces.sh | tee logs/${{ matrix.name }}.log
+          IMAGE_URL=""
+          if [[ "${{ matrix.os_type }}" == "fedora" ]]; then
+            IMAGE_URL=$(curl -s https://getfedora.org/en/cloud/download/ | \
+              grep -oP 'https://download.fedoraproject.org/pub/fedora/linux/releases/\d+/Cloud/x86_64/images/Fedora-Cloud-Base-\d+-\d+\.\d+\.x86_64\.qcow2' | head -1)
+          elif [[ "${{ matrix.os_type }}" == "centos" ]]; then
+            IMAGE_URL=$(curl -s https://cloud.centos.org/centos/9-stream/x86_64/images/ | \
+              grep -oP 'https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest\.x86_64\.qcow2' | head -1)
+          fi
+          if [[ -z "$IMAGE_URL" ]]; then
+            echo "❌ Failed to determine latest image URL"
+            exit 1
+          fi
+          echo "Latest image URL: $IMAGE_URL"
+          echo "image_url=$IMAGE_URL" >> $GITHUB_ENV
 
       - name: Download and Prepare VM Image
         if: matrix.type == 'vm'
         run: |
-          IMAGE_FILE="vm-images/$(basename '${{ matrix.image_url }}')"
+          IMAGE_FILE="vm-images/$(basename "$IMAGE_URL")"
           WORK_IMAGE="vm-images/test-${{ matrix.name }}.qcow2"
 
           if [[ ! -f "$IMAGE_FILE" ]]; then
             echo "Downloading ${{ matrix.name }} image..."
-            curl -L --fail -o "$IMAGE_FILE" "${{ matrix.image_url }}"
+            curl -L --fail -o "$IMAGE_FILE" "$IMAGE_URL"
           fi
 
           echo "Verifying image..."
@@ -139,6 +151,13 @@ jobs:
 
           kill $VM_PID || true
           rm -f vm.pid
+
+      - name: Test on Ubuntu Host
+        if: matrix.type == 'host'
+        run: |
+          echo "=== Testing Production Script on Ubuntu Host ==="
+          sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
+            bash scripts/discover-interfaces.sh | tee logs/${{ matrix.name }}.log
 
       - name: Upload Test Artifacts
         if: always()
