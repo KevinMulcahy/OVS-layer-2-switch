@@ -1,4 +1,4 @@
-name: Test Production Discover Interfaces Script
+name: OVS Layer 2 Switch CI
 
 on:
   push:
@@ -8,77 +8,75 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-discover-script:
+  run-tests:
+    name: Run OVS Tests on multiple OSs
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-
     strategy:
-      fail-fast: false
       matrix:
-        include:
-          - name: "Ubuntu-22.04-Host"
-            type: "host"
-            setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
-          - name: "Fedora-Latest-VM"
-            type: "vm"
-            os_type: "fedora"
-            username: "fedora"
-            setup_cmd: "sudo dnf install -y openvswitch"
-          - name: "CentOS-Stream-Latest-VM"
-            type: "vm"
-            os_type: "centos"
-            username: "centos"
-            setup_cmd: "sudo dnf install -y epel-release && sudo dnf install -y openvswitch"
-
+        os-image:
+          - centos-9-stream
+          - ubuntu-24.04
+          - fedora-39
+    env:
+      SSH_PORT: $((2220 + RANDOM % 100))
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      - name: Install Host Dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            qemu-system-x86 qemu-utils cloud-image-utils \
-            sshpass wget genisoimage netcat-openbsd curl jq
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
 
-      - name: Setup Test Environment
+      - name: Ensure vm-images and logs directories exist
+        run: mkdir -p vm-images logs
+
+      - name: Set IMAGE_URL dynamically based on OS
+        id: set_image
         run: |
-          mkdir -p logs vm-images
-          if [[ ! -f "scripts/discover-interfaces.sh" ]]; then
-            echo "❌ ERROR: scripts/discover-interfaces.sh not found!"
+          case "${{ matrix.os-image }}" in
+            "centos-9-stream")
+              BASE_URL="https://cloud.centos.org/centos/9-stream/x86_64/images/"
+              IMAGE_FILE_NAME=$(curl -s "$BASE_URL" | \
+                grep -Eo 'CentOS-Stream-GenericCloud-9-[^"]*\.qcow2' | \
+                grep -vE 'SHA256|CHECKSUM' | sort -V | tail -n1)
+              ;;
+            "ubuntu-24.04")
+              BASE_URL="https://cloud-images.ubuntu.com/releases/24.04/release/"
+              IMAGE_FILE_NAME=$(curl -s "$BASE_URL" | \
+                grep -Eo 'ubuntu-24\.04-server-cloudimg-amd64[^"]*\.img' | \
+                grep -vE '\.manifest|\.sha256|\.txt' | head -n1)
+              ;;
+            "fedora-39")
+              BASE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/"
+              IMAGE_FILE_NAME=$(curl -s "$BASE_URL" | \
+                grep -Eo 'Fedora-Cloud-Base-[0-9]+-[0-9]+\.x86_64\.qcow2' | sort -V | tail -n1)
+              ;;
+            *)
+              echo "Unsupported OS: ${{ matrix.os-image }}"
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "$IMAGE_FILE_NAME" ]]; then
+            echo "❌ Could not determine latest image for ${{ matrix.os-image }}"
+            echo "Debug: Showing available files from $BASE_URL ..."
+            curl -s "$BASE_URL" | grep -E '\.img|\.qcow2' | head -20
             exit 1
           fi
-          chmod +x scripts/discover-interfaces.sh
-          echo "✅ Found production script: scripts/discover-interfaces.sh"
 
-      - name: Determine Latest Cloud Image URL
-        if: matrix.type == 'vm'
-        id: get_image
-        run: |
-          IMAGE_URL=""
-          if [[ "${{ matrix.os_type }}" == "fedora" ]]; then
-            IMAGE_URL=$(curl -s https://getfedora.org/en/cloud/download/ | \
-              grep -oP 'https://download.fedoraproject.org/pub/fedora/linux/releases/\d+/Cloud/x86_64/images/Fedora-Cloud-Base-\d+-\d+\.\d+\.x86_64\.qcow2' | head -1)
-          elif [[ "${{ matrix.os_type }}" == "centos" ]]; then
-            IMAGE_URL=$(curl -s https://cloud.centos.org/centos/9-stream/x86_64/images/ | \
-              grep -oP 'https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest\.x86_64\.qcow2' | head -1)
-          fi
-          if [[ -z "$IMAGE_URL" ]]; then
-            echo "❌ Failed to determine latest image URL"
-            exit 1
-          fi
-          echo "Latest image URL: $IMAGE_URL"
-          echo "image_url=$IMAGE_URL" >> $GITHUB_ENV
+          IMAGE_URL="${BASE_URL}${IMAGE_FILE_NAME}"
+          echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
+          echo "Latest image for ${{ matrix.os-image }}: $IMAGE_FILE_NAME"
 
-      - name: Download and Prepare VM Image
-        if: matrix.type == 'vm'
+      - name: Download and prepare VM
         run: |
-          IMAGE_FILE="vm-images/$(basename "$IMAGE_URL")"
-          WORK_IMAGE="vm-images/test-${{ matrix.name }}.qcow2"
+          IMAGE_FILE="vm-images/$(basename $IMAGE_URL)"
+          WORK_IMAGE="vm-images/test-${{ matrix.os-image }}-$(date +%s).qcow2"
 
           if [[ ! -f "$IMAGE_FILE" ]]; then
-            echo "Downloading ${{ matrix.name }} image..."
-            curl -L --fail -o "$IMAGE_FILE" "$IMAGE_URL"
+            echo "Downloading VM image for ${{ matrix.os-image }}..."
+            curl -L --fail --retry 3 --retry-delay 5 -o "$IMAGE_FILE" "$IMAGE_URL"
+          else
+            echo "Using cached image: $IMAGE_FILE"
           fi
 
           echo "Verifying image..."
@@ -88,137 +86,22 @@ jobs:
           qemu-img resize "$WORK_IMAGE" 10G
 
           echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
-          echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
+          echo "✅ Prepared VM image: $WORK_IMAGE"
 
-      - name: Create Cloud-Init Configuration
-        if: matrix.type == 'vm'
+      - name: Sanitize shell scripts
         run: |
-          cat > user-data << EOF
-          #cloud-config
-          users:
-            - name: ${{ matrix.username }}
-              sudo: ALL=(ALL) NOPASSWD:ALL
-              shell: /bin/bash
-              lock_passwd: false
-              passwd: \$6\$rounds=4096\$saltsalt\$L9F.sdUps6Ff3.gOr2weMRgj5ixW3.2V4wuiOhVCz6CN8Yk4Va1eGYstNdJQlJy/0iCJt2P4/6KHaL1xMGRWQ.
-          ssh_pwauth: true
-          disable_root: false
-          package_update: true
-          packages:
-            - curl
-            - wget
-            - sudo
-            - iputils-ping
-          runcmd:
-            - systemctl enable ssh || systemctl enable sshd
-            - systemctl start ssh || systemctl start sshd
-          EOF
-          echo "instance-id: test-vm-${{ matrix.name }}-$(date +%s)" > meta-data
-          echo "local-hostname: test-${{ matrix.name }}" >> meta-data
-          genisoimage -output cloud-init.iso -volid cidata -joliet -rock user-data meta-data
+          find scripts tests -type f -name "*.sh" -exec sed -i 's/[""]/"/g' {} +
+          find scripts tests -type f -name "*.sh" -exec sed -i "s/[‘’]/'/g" {} +
+          find scripts tests -type f -name "*.sh" -exec sed -i 's/[^\x00-\x7F]/ /g' {} +
 
-      - name: Start VM and Run Test
-        if: matrix.type == 'vm'
+      - name: Run discovery and switch tests
         run: |
-          qemu-system-x86_64 \
-            -m 2048 -smp 2 -cpu qemu64 \
-            -drive file="$VM_IMAGE",format=qcow2,if=virtio \
-            -drive file=cloud-init.iso,format=raw,if=virtio \
-            -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22 \
-            -device virtio-net-pci,netdev=net0 \
-            -display none -daemonize \
-            -pidfile vm.pid
-          VM_PID=$(cat vm.pid)
+          set -e
+          LOG_FILE=logs/test-${{ matrix.os-image }}.log
+          sudo bash ./tests/test-discover-harness.sh > "$LOG_FILE" 2>&1
 
-          echo "Waiting for VM to boot..."
-          for attempt in {1..60}; do
-            if nc -z localhost $SSH_PORT; then
-              if sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-                -p $SSH_PORT ${{ matrix.username }}@localhost 'echo SSH_OK'; then
-                echo "✅ VM is ready"
-                break
-              fi
-            fi
-            sleep 5
-          done
-
-          sshpass -p 'testpass123' scp -o StrictHostKeyChecking=no -P $SSH_PORT \
-            scripts/discover-interfaces.sh ${{ matrix.username }}@localhost:/tmp/discover-interfaces.sh
-
-          sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -p $SSH_PORT \
-            ${{ matrix.username }}@localhost "sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 bash /tmp/discover-interfaces.sh" \
-            | tee logs/${{ matrix.name }}.log
-
-          kill $VM_PID || true
-          rm -f vm.pid
-
-      - name: Test on Ubuntu Host
-        if: matrix.type == 'host'
-        run: |
-          echo "=== Testing Production Script on Ubuntu Host ==="
-          sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
-            bash scripts/discover-interfaces.sh | tee logs/${{ matrix.name }}.log
-
-      - name: Upload Test Artifacts
-        if: always()
+      - name: Upload test log artifact
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ matrix.name }}
-          path: logs/
-          retention-days: 7
-
-  generate-summary:
-    needs: test-discover-script
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download All Test Results
-        uses: actions/download-artifact@v4
-        with:
-          path: all-results
-
-      - name: Generate Summary Report
-        run: |
-          echo "# Production discover-interfaces.sh Test Results" > SUMMARY.md
-          echo "" >> SUMMARY.md
-          echo "**Test Date:** $(date)" >> SUMMARY.md
-          echo "**Repository:** $GITHUB_REPOSITORY" >> SUMMARY.md
-          echo "**Commit:** $GITHUB_SHA" >> SUMMARY.md
-          echo "" >> SUMMARY.md
-          echo "## Test Results by Platform" >> SUMMARY.md
-          echo "" >> SUMMARY.md
-
-          SUCCESS_COUNT=0
-          TOTAL_COUNT=0
-
-          for result_dir in all-results/test-results-*/; do
-            if [[ -d "$result_dir" ]]; then
-              TOTAL_COUNT=$((TOTAL_COUNT + 1))
-              PLATFORM_NAME=$(basename "$result_dir" | sed 's/test-results-//')
-
-              echo "### $PLATFORM_NAME" >> SUMMARY.md
-              echo "" >> SUMMARY.md
-              if grep -q "Configuration file written" "$result_dir"/*.log; then
-                echo "**Status: ✅ SUCCESS**" >> SUMMARY.md
-                SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-              else
-                echo "**Status: ❌ FAILED**" >> SUMMARY.md
-              fi
-              echo "" >> SUMMARY.md
-              echo '```' >> SUMMARY.md
-              tail -20 "$result_dir"/*.log >> SUMMARY.md || true
-              echo '```' >> SUMMARY.md
-              echo "" >> SUMMARY.md
-            fi
-          done
-
-          sed -i "1i ## Summary\n\n**Overall Success Rate:** $SUCCESS_COUNT/$TOTAL_COUNT platforms\n" SUMMARY.md
-
-          echo "=== SUMMARY REPORT ==="
-          cat SUMMARY.md
-
-      - name: Upload Summary Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-summary-report
-          path: SUMMARY.md
+          name: test-logs-${{ matrix.os-image }}
+          path: logs/test-${{ matrix.os-image }}.log
