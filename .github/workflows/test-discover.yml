@@ -33,8 +33,8 @@ jobs:
               echo "IMAGE_URL=https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img" >> $GITHUB_ENV
               ;;
             "fedora-39")
-              # Use latest Fedora 39 cloud image to avoid 404
-              echo "IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Latest.x86_64.qcow2" >> $GITHUB_ENV
+              # Fixed Fedora 39 minor release version to avoid 404
+              echo "IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-39-1.7.x86_64.qcow2" >> $GITHUB_ENV
               ;;
           esac
 
