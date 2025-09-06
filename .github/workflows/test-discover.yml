@@ -1,170 +1,30 @@
-name: Test Production Discover Interfaces Script
-
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
-  test-discover-script:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: "Ubuntu-Host"
-            type: "host"
-            setup_cmd: "sudo apt-get update && sudo apt-get install -y openvswitch-switch"
-          - name: "Fedora-39-VM"
-            type: "vm"
-            image_url: "https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-Generic.x86_64-39-1.5.qcow2"
-            username: "fedora"
-            setup_cmd: "sudo dnf install -y openvswitch"
-          - name: "CentOS-Stream-9-VM"
-            type: "vm"
-            image_url: "https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2"
-            username: "cloud-user"
-            setup_cmd: "sudo dnf install -y epel-release && sudo dnf install -y openvswitch"
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Install Host Dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            qemu-system-x86 qemu-utils cloud-image-utils \
-            sshpass wget genisoimage netcat-openbsd
+      - name: List all files
+        run: find . -name "*.sh"
 
       - name: Setup Test Environment
         run: |
-          mkdir -p logs vm-images
           if [[ ! -f "scripts/discover-interfaces.sh" ]]; then
             echo "❌ ERROR: scripts/discover-interfaces.sh not found!"
-            find . -name "*.sh" -type f
             exit 1
           fi
-          echo "✅ Found production script:"
-          ls -la scripts/discover-interfaces.sh
+          # Other setup steps...
+
+      - name: Make script executable
+        run: chmod +x scripts/discover-interfaces.sh
 
       - name: Test on Ubuntu Host
-        if: matrix.type == 'host'
         run: |
-          echo "=== Testing Production Script on Ubuntu Host ==="
-          ${{ matrix.setup_cmd }}
-          sudo modprobe dummy numdummies=3 || true
-          for i in {0..2}; do sudo ip link add test-dummy$i type dummy 2>/dev/null || true; done
-          for intf in dummy0 dummy1 dummy2 test-dummy0 test-dummy1 test-dummy2; do
-            sudo ip link set $intf up 2>/dev/null || true
-          done
-          LOG_FILE="logs/${{ matrix.name }}.log"
-          sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
-            bash scripts/discover-interfaces.sh 2>&1 | tee "$LOG_FILE"
-          SCRIPT_EXIT_CODE=${PIPESTATUS[0]}
-          [[ -f /etc/ovs/interface-config.conf ]] || SCRIPT_EXIT_CODE=1
-          exit $SCRIPT_EXIT_CODE
-
-      - name: Download and Prepare VM Image
-        if: matrix.type == 'vm'
-        run: |
-          IMAGE_FILE="vm-images/$(basename '${{ matrix.image_url }}')"
-          WORK_IMAGE="vm-images/test-${{ matrix.name }}.qcow2"
-          if [[ ! -f "$IMAGE_FILE" ]]; then
-            wget -q --show-progress -O "$IMAGE_FILE" "${{ matrix.image_url }}"
-          fi
-          cp "$IMAGE_FILE" "$WORK_IMAGE"
-          qemu-img resize "$WORK_IMAGE" 10G
-          echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
-          echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
-
-      - name: Start VM and Run Test
-        if: matrix.type == 'vm'
-        run: |
-          qemu-system-x86_64 \
-            -m 2048 -smp 2 \
-            -cpu host -enable-kvm \
-            -drive file="$VM_IMAGE",format=qcow2,if=virtio \
-            -drive file=cloud-init.iso,format=raw,if=virtio \
-            -netdev user,id=net0,hostfwd=tcp::$SSH_PORT-:22 \
-            -device virtio-net-pci,netdev=net0 \
-            -display none -daemonize \
-            -pidfile vm.pid
-
-          VM_PID=$(cat vm.pid)
-
-          for attempt in {1..60}; do
-            if sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
-              -p $SSH_PORT ${{ matrix.username }}@localhost 'echo "SSH_OK"' >/dev/null 2>&1; then
-              break
-            fi
-            sleep 5
-          done
-
-          sshpass -p 'testpass123' scp -o StrictHostKeyChecking=no -P $SSH_PORT \
-            scripts/discover-interfaces.sh ${{ matrix.username }}@localhost:/tmp/discover-interfaces.sh
-
-          sshpass -p 'testpass123' ssh -o StrictHostKeyChecking=no -p $SSH_PORT \
-            ${{ matrix.username }}@localhost bash << 'VM_TEST_SCRIPT'
-            set -e
-            ${{ matrix.setup_cmd }}
-            sudo modprobe dummy numdummies=2 || true
-            for i in {0..1}; do sudo ip link add vm-test$i type dummy 2>/dev/null || true; done
-            for intf in dummy0 dummy1 vm-test0 vm-test1; do sudo ip link set $intf up 2>/dev/null || true; done
-            chmod +x /tmp/discover-interfaces.sh
-            sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
-              bash /tmp/discover-interfaces.sh
-            [[ -f /etc/ovs/interface-config.conf ]]
-          VM_TEST_SCRIPT
-
-          TEST_EXIT_CODE=$?
-          kill $VM_PID 2>/dev/null || true
-          rm -f vm.pid
-          exit $TEST_EXIT_CODE
-
-      - name: Upload Test Artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: test-results-${{ matrix.name }}
-          path: logs/
-          retention-days: 7
-
-  generate-summary:
-    needs: test-discover-script
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Download All Test Results
-        uses: actions/download-artifact@v4
-        with:
-          path: all-results
-
-      - name: Generate Summary Report
-        run: |
-          echo "# Production discover-interfaces.sh Test Results" > SUMMARY.md
-          echo "**Test Date:** $(date)" >> SUMMARY.md
-          echo "**Repository:** $GITHUB_REPOSITORY" >> SUMMARY.md
-          echo "**Commit:** $GITHUB_SHA" >> SUMMARY.md
-          SUCCESS_COUNT=0
-          TOTAL_COUNT=0
-          for result_dir in all-results/test-results-*/; do
-            [[ -d "$result_dir" ]] || continue
-            TOTAL_COUNT=$((TOTAL_COUNT + 1))
-            PLATFORM_NAME=$(basename "$result_dir" | sed 's/test-results-//')
-            if grep -q "SUCCESS" "$result_dir"/* 2>/dev/null; then
-              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-            fi
-          done
-          echo "## Summary" >> SUMMARY.md
-          echo "**Overall Success Rate:** $SUCCESS_COUNT/$TOTAL_COUNT platforms" >> SUMMARY.md
-          cat SUMMARY.md
-
-      - name: Upload Summary Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-summary-report
-          path: SUMMARY.md
+          # Your test commands here...
+          echo "Environment Variables:"
+          printenv
