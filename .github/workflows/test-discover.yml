@@ -48,7 +48,6 @@ jobs:
           BASE_IMAGE="vm-images/base.qcow2"
           WORK_IMAGE="vm-images/test-$(basename "$IMAGE_URL" .qcow2)-$(date +%s).qcow2"
 
-          # Download if cache is empty
           if [[ ! -f "$BASE_IMAGE" ]]; then
               echo "Downloading base VM image..."
               curl -L --fail -o "$BASE_IMAGE" "$IMAGE_URL"
@@ -56,15 +55,12 @@ jobs:
               echo "Using cached base image: $BASE_IMAGE"
           fi
 
-          # Verify image
           echo "Verifying image..."
           qemu-img info "$BASE_IMAGE" || { echo "❌ Invalid image file"; exit 1; }
 
-          # Copy and resize working image
           cp "$BASE_IMAGE" "$WORK_IMAGE"
           qemu-img resize "$WORK_IMAGE" 10G
 
-          # Cleanup old working images, keep only latest 3
           echo "Cleaning up old VM images..."
           ls -1tr vm-images/test-*.qcow2 | head -n -3 | xargs -r rm -f || true
 
@@ -96,7 +92,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: vm-image
-          path: vm-images
+          path: vm-images   # downloaded VM stays in vm-images, repo files intact
+
+      - name: Verify files
+        run: |
+          echo "Listing repo root:"
+          ls -l
+          echo "Listing tests folder:"
+          ls -l ./tests
+          echo "Listing vm-images folder:"
+          ls -l ./vm-images
 
       - name: Set VM_IMAGE environment variable
         run: echo "VM_IMAGE=vm-images/$(ls vm-images)" >> $GITHUB_ENV
@@ -106,9 +111,6 @@ jobs:
           echo "✅ Using VM image: $VM_IMAGE"
           echo "SSH Port: $SSH_PORT"
           qemu-img info "$VM_IMAGE"
-
-      - name: List tests folder
-        run: ls -l ./tests
 
       - name: Run discovery and switch tests
         run: |
