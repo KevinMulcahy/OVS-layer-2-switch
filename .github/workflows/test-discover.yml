@@ -20,11 +20,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install qemu-img and utilities
+      - name: Install qemu-img and curl
         run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
 
       - name: Ensure vm-images directory exists
         run: mkdir -p vm-images
+
+      - name: Cache base VM image
+        id: cache-vm
+        uses: actions/cache@v3
+        with:
+          path: vm-images/base.qcow2
+          key: vm-image-base-${{ hashFiles('scripts/prepare-vm.sh') || '' }}
+          restore-keys: |
+            vm-image-base-
 
       - name: Download, verify, and prepare VM image
         id: set-env
@@ -36,25 +45,33 @@ jobs:
               exit 1
           fi
 
-          IMAGE_FILE="vm-images/$(basename "$IMAGE_URL")"
+          BASE_IMAGE="vm-images/base.qcow2"
           WORK_IMAGE="vm-images/test-$(basename "$IMAGE_URL" .qcow2)-$(date +%s).qcow2"
 
-          if [[ ! -f "$IMAGE_FILE" ]]; then
-              echo "Downloading VM image..."
-              curl -L --fail -o "$IMAGE_FILE" "$IMAGE_URL"
+          # Download if cache is empty
+          if [[ ! -f "$BASE_IMAGE" ]]; then
+              echo "Downloading base VM image..."
+              curl -L --fail -o "$BASE_IMAGE" "$IMAGE_URL"
           else
-              echo "Using cached image: $IMAGE_FILE"
+              echo "Using cached base image: $BASE_IMAGE"
           fi
 
+          # Verify image
           echo "Verifying image..."
-          qemu-img info "$IMAGE_FILE" || { echo "❌ Invalid image file"; exit 1; }
+          qemu-img info "$BASE_IMAGE" || { echo "❌ Invalid image file"; exit 1; }
 
-          cp "$IMAGE_FILE" "$WORK_IMAGE"
+          # Copy and resize working image
+          cp "$BASE_IMAGE" "$WORK_IMAGE"
           qemu-img resize "$WORK_IMAGE" 10G
 
-          echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
-          echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
+          # Cleanup old working images, keep only latest 3
+          echo "Cleaning up old VM images..."
+          ls -1tr vm-images/test-*.qcow2 | head -n -3 | xargs -r rm -f || true
 
+          # Set outputs and environment variables
+          echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
+          SSH_PORT=$((2220 + RANDOM % 100))
+          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
           echo "vm_image=$WORK_IMAGE" >> $GITHUB_OUTPUT
           echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
 
@@ -69,6 +86,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
+      - name: Install qemu-img
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils
+
       - name: Display VM info
         run: |
           echo "✅ Using VM image: $VM_IMAGE"
@@ -78,6 +98,5 @@ jobs:
       - name: Run discovery and switch tests
         run: |
           set -e
-          # Replace these with your actual test scripts
           sudo bash ./scripts/test-discover-interfaces.sh
           sudo bash ./scripts/test-discover.yaml
