@@ -41,7 +41,8 @@ jobs:
             "ubuntu-24.04")
               BASE_URL="https://cloud-images.ubuntu.com/releases/24.04/release/"
               IMAGE_FILE_NAME=$(curl -s "$BASE_URL" | \
-                grep -Eo 'ubuntu-24\.04-server-cloudimg-amd64(-disk-kvm)?\.img' | sort -V | head -n1)
+                grep -Eo 'ubuntu-24\.04-server-cloudimg-amd64[^"]*\.img' | \
+                grep -vE '\.manifest|\.sha256|\.txt' | head -n1)
               ;;
             "fedora-39")
               BASE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/"
@@ -56,6 +57,8 @@ jobs:
 
           if [[ -z "$IMAGE_FILE_NAME" ]]; then
             echo "❌ Could not determine latest image for ${{ matrix.os-image }}"
+            echo "Debug: Showing available files from $BASE_URL ..."
+            curl -s "$BASE_URL" | grep -E '\.img|\.qcow2' | head -20
             exit 1
           fi
 
