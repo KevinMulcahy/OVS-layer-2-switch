@@ -74,7 +74,7 @@ jobs:
           echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
 
       - name: Upload VM image artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: vm-image
           path: ${{ github.workspace }}/vm-images/${{ steps.set-env.outputs.vm_image_name }}
@@ -93,7 +93,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y qemu-utils
 
       - name: Download VM image artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: vm-image
           path: vm-images
