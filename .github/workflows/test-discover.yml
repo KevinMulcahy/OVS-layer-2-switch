@@ -113,7 +113,14 @@ jobs:
           echo "SSH Port: $SSH_PORT"
           qemu-img info "$VM_IMAGE"
 
-      - name: Run discovery and switch tests
+      - name: Run discovery and switch tests and save logs
         run: |
           set -e
-          sudo bash ./tests/test-discover-harness.sh
+          mkdir -p logs
+          sudo bash ./tests/test-discover-harness.sh > logs/test-discover.log 2>&1
+
+      - name: Upload test logs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: logs/test-discover.log
