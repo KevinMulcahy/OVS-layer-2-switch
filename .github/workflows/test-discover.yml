@@ -17,8 +17,11 @@ jobs:
       vm_image: ${{ steps.set-env.outputs.vm_image }}
       ssh_port: ${{ steps.set-env.outputs.ssh_port }}
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
+
+      - name: Install qemu-img and utilities
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
 
       - name: Ensure vm-images directory exists
         run: mkdir -p vm-images
@@ -52,7 +55,6 @@ jobs:
           echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
           echo "SSH_PORT=$((2220 + RANDOM % 100))" >> $GITHUB_ENV
 
-          # Set outputs for downstream jobs
           echo "vm_image=$WORK_IMAGE" >> $GITHUB_OUTPUT
           echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
 
@@ -64,7 +66,7 @@ jobs:
       VM_IMAGE: ${{ needs.prepare-vm.outputs.vm_image }}
       SSH_PORT: ${{ needs.prepare-vm.outputs.ssh_port }}
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
       - name: Display VM info
@@ -76,6 +78,6 @@ jobs:
       - name: Run discovery and switch tests
         run: |
           set -e
-          # Example: run your test script here
+          # Replace these with your actual test scripts
           sudo bash ./scripts/test-discover-interfaces.sh
           sudo bash ./scripts/test-discover.yaml
