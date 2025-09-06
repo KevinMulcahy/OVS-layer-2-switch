@@ -23,14 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
-
-      - name: Ensure vm-images and logs directories exist
-        run: mkdir -p vm-images logs
-
-      - name: Set IMAGE_URL dynamically based on OS
-        id: set_image
+      - name: Set IMAGE_URL dynamically
         run: |
           case "${{ matrix.os-image }}" in
             "centos-9-stream")
@@ -54,9 +47,10 @@ jobs:
               fi
               ;;
             "fedora-39")
-              BASE_URL="https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/"
+              BASE_URL="https://dl.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images/"
               IMAGE_FILE_NAME=$(curl -s "$BASE_URL" | \
-                grep -Eo 'Fedora-Cloud-Base-[0-9]+-[0-9]+\.x86_64\.qcow2' | sort -V | tail -n1)
+                grep -Eo 'Fedora-Cloud-Base-[0-9]+-[0-9]+\.x86_64\.qcow2' | \
+                sort -V | tail -n1)
               ;;
             *)
               echo "Unsupported OS: ${{ matrix.os-image }}"
@@ -66,7 +60,7 @@ jobs:
 
           if [[ -z "$IMAGE_FILE_NAME" ]]; then
             echo "❌ Could not determine latest image for ${{ matrix.os-image }}"
-            echo "Debug: Showing available files from $BASE_URL ..."
+            echo "Debug: showing available files from $BASE_URL ..."
             curl -s "$BASE_URL" | grep -E '\.img|\.qcow2' | head -20
             exit 1
           fi
@@ -74,6 +68,12 @@ jobs:
           IMAGE_URL="${BASE_URL}${IMAGE_FILE_NAME}"
           echo "IMAGE_URL=$IMAGE_URL" >> $GITHUB_ENV
           echo "Latest image for ${{ matrix.os-image }}: $IMAGE_FILE_NAME"
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-utils curl
+
+      - name: Ensure vm-images and logs directories exist
+        run: mkdir -p vm-images logs
 
       - name: Download and prepare VM
         run: |
