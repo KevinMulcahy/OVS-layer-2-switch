@@ -1,25 +1,28 @@
+name: Debug and Test Discover Interfaces Script
+
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  test:
+  test-ubuntu:
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Debug file presence
         run: |
           echo "Listing contents of the working directory:"
           ls -al
           echo "Listing contents of the 'scripts' directory:"
-          ls -al scripts
+          ls -al scripts || echo "⚠️ 'scripts' directory not found"
 
-      - name: List all files
+      - name: List all .sh files
         run: find . -name "*.sh"
 
       - name: Setup Test Environment
@@ -28,13 +31,58 @@ jobs:
             echo "❌ ERROR: scripts/discover-interfaces.sh not found!"
             exit 1
           fi
-          # Other setup steps...
+          echo "✅ Found scripts/discover-interfaces.sh"
 
       - name: Make script executable
         run: chmod +x scripts/discover-interfaces.sh
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openvswitch-switch
+
       - name: Test on Ubuntu Host
         run: |
-          # Your test commands here...
+          echo "=== Testing discover-interfaces.sh on Ubuntu Runner ==="
+
+          # Show environment
           echo "Environment Variables:"
           printenv
+
+          # Create dummy interfaces for testing
+          sudo modprobe dummy numdummies=3 || true
+          for i in {0..2}; do
+            sudo ip link add test-dummy$i type dummy 2>/dev/null || true
+            sudo ip link set test-dummy$i up || true
+          done
+          sudo ip link add test-br0 type bridge 2>/dev/null || true
+
+          echo "=== Initial Network State ==="
+          ip -br link show
+
+          LOG_FILE="ubuntu-host-test.log"
+          sudo -E TEST_MODE=true FORCE=true MANAGEMENT_INTERFACE=eth0 \
+            bash scripts/discover-interfaces.sh 2>&1 | tee "$LOG_FILE"
+          SCRIPT_EXIT_CODE=${PIPESTATUS[0]}
+
+          # Verify config file created
+          if [[ -f /etc/ovs/interface-config.conf ]]; then
+            echo "✅ Configuration file created successfully"
+            cat /etc/ovs/interface-config.conf
+          else
+            echo "❌ No configuration file created"
+            SCRIPT_EXIT_CODE=1
+          fi
+
+          # Cleanup
+          for i in {0..2}; do sudo ip link delete test-dummy$i 2>/dev/null || true; done
+          sudo ip link delete test-br0 2>/dev/null || true
+
+          exit $SCRIPT_EXIT_CODE
+
+      - name: Upload test log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ubuntu-host-test-log
+          path: ubuntu-host-test.log
