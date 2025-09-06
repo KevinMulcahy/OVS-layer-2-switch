@@ -14,7 +14,7 @@ jobs:
     env:
       IMAGE_URL: https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2
     outputs:
-      vm_image: ${{ steps.set-env.outputs.vm_image }}
+      vm_image_name: ${{ steps.set-env.outputs.vm_image_name }}
       ssh_port: ${{ steps.set-env.outputs.ssh_port }}
     steps:
       - name: Checkout repository
@@ -69,18 +69,21 @@ jobs:
           ls -1tr vm-images/test-*.qcow2 | head -n -3 | xargs -r rm -f || true
 
           # Set outputs and environment variables
-          echo "VM_IMAGE=$WORK_IMAGE" >> $GITHUB_ENV
+          echo "VM_IMAGE_NAME=$(basename "$WORK_IMAGE")" >> $GITHUB_OUTPUT
           SSH_PORT=$((2220 + RANDOM % 100))
-          echo "SSH_PORT=$SSH_PORT" >> $GITHUB_ENV
-          echo "vm_image=$WORK_IMAGE" >> $GITHUB_OUTPUT
           echo "ssh_port=$SSH_PORT" >> $GITHUB_OUTPUT
+
+      - name: Upload VM image artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: vm-image
+          path: ${{ github.workspace }}/vm-images/${{ steps.set-env.outputs.vm_image_name }}
 
   run-tests:
     name: Run OVS Tests
     runs-on: ubuntu-latest
     needs: prepare-vm
     env:
-      VM_IMAGE: ${{ needs.prepare-vm.outputs.vm_image }}
       SSH_PORT: ${{ needs.prepare-vm.outputs.ssh_port }}
     steps:
       - name: Checkout repository
@@ -88,6 +91,15 @@ jobs:
 
       - name: Install qemu-img
         run: sudo apt-get update && sudo apt-get install -y qemu-utils
+
+      - name: Download VM image artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: vm-image
+          path: vm-images
+
+      - name: Set VM_IMAGE environment variable
+        run: echo "VM_IMAGE=vm-images/$(ls vm-images)" >> $GITHUB_ENV
 
       - name: Display VM info
         run: |
