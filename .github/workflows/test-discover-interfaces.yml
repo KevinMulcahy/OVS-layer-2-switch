@@ -38,7 +38,6 @@ jobs:
         run: |
           dnf install -y iproute net-tools ethtool
           # OVS skipped: needs --privileged
-
       - name: Run discover-interfaces.sh (Fedora sanity check)
         run: |
           chmod +x ./scripts/discover-interfaces.sh
@@ -55,7 +54,6 @@ jobs:
         run: |
           dnf install -y iproute net-tools ethtool
           # OVS skipped: needs --privileged
-      - name: Add dummy interfaces
       - name: Run discover-interfaces.sh (CentOS sanity check)
         run: |
           chmod +x ./scripts/discover-interfaces.sh
