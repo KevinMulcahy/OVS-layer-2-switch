@@ -6,14 +6,22 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:  # allows manual trigger
-  
+
 jobs:
-  test-on-ubuntu:
+  test-discover-interfaces:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
-      - run: chmod +x ./scripts/discover-interfaces.sh
-      - run: ./scripts/discover-interfaces.sh
+      - name: Fix runner workspace permissions
+        run: sudo chown -R $USER:$USER /home/$USER/actions-runner/_work
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make script executable
+        run: chmod +x ./scripts/discover-interfaces.sh
+
+      - name: Run discover-interfaces.sh
+        run: ./scripts/discover-interfaces.sh
 
   test-on-fedora:
     runs-on: self-hosted
