@@ -1,0 +1,36 @@
+name: OVS Interface Discovery Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:  # allows manual trigger
+  
+jobs:
+  test-on-ubuntu:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - run: chmod +x ./discover-interfaces.sh
+      - run: ./discover-interfaces.sh
+
+  test-on-fedora:
+    runs-on: self-hosted
+    container:
+      image: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: dnf install -y iproute net-tools
+      - run: chmod +x ./discover-interfaces.sh
+      - run: ./discover-interfaces.sh
+
+  test-on-centos:
+    runs-on: self-hosted
+    container:
+      image: quay.io/centos/centos:stream9
+    steps:
+      - uses: actions/checkout@v4
+      - run: dnf install -y iproute net-tools
+      - run: chmod +x ./discover-interfaces.sh
+      - run: ./discover-interfaces.sh
