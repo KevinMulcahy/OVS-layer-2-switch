@@ -22,13 +22,6 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y openvswitch-switch bridge-utils iproute2 ethtool
-
-      - name: Add dummy interfaces
-        run: |
-          sudo ip link add veth0 type veth peer name veth1
-          sudo ip link set veth0 up
-          sudo ip link set veth1 up
-
       - name: Run discover-interfaces.sh
         run: |
           chmod +x ./scripts/discover-interfaces.sh
@@ -45,11 +38,7 @@ jobs:
         run: |
           dnf install -y iproute net-tools ethtool
           # OVS skipped: needs --privileged
-      - name: Add dummy interfaces
-        run: |
-          ip link add veth0 type veth peer name veth1
-          ip link set veth0 up
-          ip link set veth1 up
+
       - name: Run discover-interfaces.sh (Fedora sanity check)
         run: |
           chmod +x ./scripts/discover-interfaces.sh
@@ -67,10 +56,6 @@ jobs:
           dnf install -y iproute net-tools ethtool
           # OVS skipped: needs --privileged
       - name: Add dummy interfaces
-        run: |
-          ip link add veth0 type veth peer name veth1
-          ip link set veth0 up
-          ip link set veth1 up
       - name: Run discover-interfaces.sh (CentOS sanity check)
         run: |
           chmod +x ./scripts/discover-interfaces.sh
